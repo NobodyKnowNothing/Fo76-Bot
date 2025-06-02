@@ -1,0 +1,8 @@
+*.log
+/src/__pycache__
+/src/build_temp_fo76
+/src/dist_fo76_bot
+/src/__pycache__
+*.log
+*.log
+/src/__pycache__
