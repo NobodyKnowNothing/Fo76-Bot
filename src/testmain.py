@@ -10,34 +10,277 @@ import datetime
 import pyautogui
 import os
 from readtext import readui, tesseract_path_init
-import logging
-import logging.handlers
+
 
 # --- Logger Setup ---
-LOG_FILENAME = 'fo76_bot.log'
+import logging
+import logging.handlers
+import os
+from cryptography.hazmat.primitives import hashes, serialization
+from cryptography.hazmat.primitives.asymmetric import padding as rsa_padding
+from cryptography.hazmat.primitives.ciphers import Cipher, algorithms, modes
+from cryptography.hazmat.backends import default_backend
+import base64
+import sys # For sys.stderr
+
+# --- Constants ---
+LOG_FILENAME = 'fo76bot.log'
+HARDCODED_PUBLIC_KEY_PEM = """-----BEGIN PUBLIC KEY-----
+MIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8AMIIBCgKCAQEAvgxSvDJ2gON+2rxpyCK1
+4y9xDiFYXoLNxJqcs1W4ogxBBdFlwndAq13phId+HCPTZPUHsyFx1ofpfPw3KPku
+KZU140VbJG5xri54UUNo7pO4EQKjtfFN4iFCiLWiG81P83I52+cpqGOJ1SznCM8g
+quhhPG5IiOn3vhIA85XadLZyMo928diTo12AmjRzDLTYsVvAS/F8b8GTaBim18v4
+idHz33Qav4IgzxyS5T5DTmC6zoRRgwXzZru+YV0dqOZ9en2KJIeJmpeJt2k/EhDP
+xmIkENWSbJAcefRskS2CrZzwv301m9eaJKIT11S5fKK+WdL5t04wyNky2XwHnfAB
+XQIDAQAB
+-----END PUBLIC KEY-----"""
+# Example of a placeholder key for testing the check in setup_logger
+# HARDCODED_PUBLIC_KEY_PEM = """-----BEGIN PUBLIC KEY-----
+# MIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8AMIIBCgKCAQEAyReplaceWithYourKey...
+# -----END PUBLIC KEY-----"""
+
+
+# --- Internal Logger for Logging System Diagnostics ---
+_LOGGING_MODULE_NAME = __name__
+# Use a very distinct name for this logger to avoid any conflicts
+_INTERNAL_DEBUG_LOGGER_NAME = f"{_LOGGING_MODULE_NAME}.ENCRYPTION_DEBUG"
+_internal_logger = logging.getLogger(_INTERNAL_DEBUG_LOGGER_NAME)
+_internal_logger.handlers.clear() # Ensure no old handlers
+_internal_logger.setLevel(logging.DEBUG) # Crucial: set logger level
+
+_console_handler_internal = logging.StreamHandler(sys.stderr) # Explicitly use stderr
+_console_handler_internal.setLevel(logging.DEBUG) # Crucial: set handler level
+_console_handler_internal.setFormatter(
+    logging.Formatter(f"INTERNAL-ENCRYPTION-DEBUG [%(levelname)s] %(name)s -> %(funcName)s:%(lineno)d: %(message)s")
+)
+_internal_logger.addHandler(_console_handler_internal)
+_internal_logger.propagate = False # Do not pass to root
+_internal_logger.disabled = True # Ensure it's not disabled
+
+_internal_logger.info(f"Internal debug logger '{_INTERNAL_DEBUG_LOGGER_NAME}' configured and active.")
+
+# --- Encryption Helper Functions ---
+def load_public_key_from_string(pem_string):
+    _internal_logger.debug("Attempting to load public key from PEM string.")
+    try:
+        public_key = serialization.load_pem_public_key(
+            pem_string.encode('utf-8'),
+            backend=default_backend()
+        )
+        _internal_logger.debug("Public key loaded successfully from PEM string.")
+        return public_key
+    except Exception as e:
+        # This error is critical because if the key is provided but invalid, encryption is expected but will fail.
+        _internal_logger.critical(f"CRITICAL ERROR loading public key from string: {e}. Encryption WILL FAIL if this key was intended for use.", exc_info=True)
+        raise ValueError(f"Invalid public key PEM string: {e}")
+
+def encrypt_message_hybrid(message_bytes, public_key):
+    _internal_logger.debug("encrypt_message_hybrid called.")
+    aes_key = os.urandom(32)
+    iv = os.urandom(12) # GCM standard IV size is 12 bytes (96 bits)
+    cipher = Cipher(algorithms.AES(aes_key), modes.GCM(iv), backend=default_backend())
+    encryptor = cipher.encryptor()
+    ciphertext = encryptor.update(message_bytes) + encryptor.finalize()
+    tag = encryptor.tag # GCM tag, typically 16 bytes
+    
+    encrypted_aes_key = public_key.encrypt(
+        aes_key,
+        rsa_padding.OAEP(
+            mgf=rsa_padding.MGF1(algorithm=hashes.SHA256()),
+            algorithm=hashes.SHA256(),
+            label=None
+        )
+    )
+    # Concatenate: Encrypted AES Key + IV + GCM Tag + Ciphertext
+    result_bytes = encrypted_aes_key + iv + tag + ciphertext
+    result_b64 = base64.b64encode(result_bytes)
+    _internal_logger.debug(f"encrypt_message_hybrid completed. Output base64 length: {len(result_b64)}")
+    return result_b64
+
+# --- Custom Formatter ---
+class EncryptedFormatter(logging.Formatter):
+    def __init__(self, fmt=None, datefmt=None, style='%', public_key_pem_string=None, file_handler_level=logging.INFO):
+        super().__init__(fmt, datefmt, style)
+        self.formatter_id = id(self) # For tracking instance
+        _internal_logger.info(f"EncryptedFormatter instance {self.formatter_id} __init__ starting.")
+        self.public_key = None
+        self._file_handler_level = file_handler_level # Used for conditional internal logging
+
+        if public_key_pem_string:
+            try:
+                # Responsibility for checking if public_key_pem_string *is* a placeholder
+                # (and thus shouldn't be used) primarily lies with the calling code (e.g., setup_logger).
+                # Here, we attempt to load whatever string is given.
+                # load_public_key_from_string will raise ValueError if it's not a valid PEM.
+                self.public_key = load_public_key_from_string(public_key_pem_string)
+                _internal_logger.info(f"EncryptedFormatter {self.formatter_id}: Successfully initialized public key.")
+            except ValueError as e: # Raised by load_public_key_from_string for invalid PEM
+                _internal_logger.error(f"EncryptedFormatter {self.formatter_id}: Failed to initialize public key (Invalid PEM string provided): {e}. Encryption will be skipped.")
+            except Exception as e: # Other unexpected errors during key loading
+                _internal_logger.error(f"EncryptedFormatter {self.formatter_id}: Unexpected error initializing public key: {e}. Encryption will be skipped.", exc_info=True)
+        else:
+            _internal_logger.warning(f"EncryptedFormatter {self.formatter_id}: No public key PEM string provided. Encryption will be skipped.")
+        
+        _internal_logger.info(f"EncryptedFormatter instance {self.formatter_id} __init__ finished. Public key is {'SET' if self.public_key else 'NOT SET'}.")
+
+    def format(self, record):
+        _internal_logger.debug(f"--- EncryptedFormatter {self.formatter_id} format() CALLED for record: {record.name} - {record.levelname} - '{str(record.msg)[:50]}...' ---")
+        _internal_logger.debug(f"  Formatter {self.formatter_id}: Current self.public_key is {'SET' if self.public_key else 'NOT SET'}.")
+
+        # Store original state that defines getMessage() behavior and cached formatted exception text
+        original_msg = record.msg
+        original_args = record.args
+        # getattr is used because record.exc_text might not be set yet by any formatter.
+        original_exc_text = getattr(record, 'exc_text', None) 
+
+        # Get the fully substituted message. This call itself does not alter 'record.message'.
+        # It uses the current record.msg and record.args.
+        log_message_to_process = record.getMessage()
+        _internal_logger.debug(f"  Formatter {self.formatter_id}: log_message_to_process = '{log_message_to_process[:100]}...'")
+
+        # These will be temporarily set on the record for super().format()
+        # Default to original values, meaning no encryption or modification initially.
+        msg_for_formatting = original_msg
+        args_for_formatting = original_args
+
+        if self.public_key and log_message_to_process: # Ensure there's content to encrypt
+            _internal_logger.debug(f"  Formatter {self.formatter_id}: Public key IS SET. Attempting encryption for: '{log_message_to_process[:50]}...'")
+            try:
+                message_to_encrypt_bytes = log_message_to_process.encode('utf-8')
+                encrypted_msg_b64 = encrypt_message_hybrid(
+                    message_to_encrypt_bytes,
+                    self.public_key
+                )
+                msg_for_formatting = f"[ENCRYPTED]{encrypted_msg_b64.decode('utf-8')}"
+                args_for_formatting = () # The message is now fully formed, no args needed for formatting
+                _internal_logger.debug(f"  Formatter {self.formatter_id}: Encryption SUCCEEDED. msg_for_formatting is now: '{msg_for_formatting[:60]}...'")
+            except Exception as e:
+                _internal_logger.error(
+                    f"  Formatter {self.formatter_id}: Encryption FAILED for record [{record.name}/{record.levelname}]. Error: {e}. Original msg: {log_message_to_process[:100]}...",
+                    exc_info=True # Log this specific exception to the internal logger
+                )
+                # Fallback: format the original message with a prefix indicating failure
+                msg_for_formatting = f"[ENCRYPTION_FAILED] {log_message_to_process}"
+                args_for_formatting = ()
+                _internal_logger.debug(f"  Formatter {self.formatter_id}: msg_for_formatting after encryption failure: '{msg_for_formatting[:60]}...'")
+        
+        elif not self.public_key:
+            _internal_logger.warning(f"  Formatter {self.formatter_id}: Public key IS NOT SET. Skipping encryption for '{log_message_to_process[:50]}...'.")
+            # This internal warning is for diagnostics; the actual log record will be formatted plainly.
+            if record.levelno >= self._file_handler_level: 
+                 _internal_logger.warning(
+                    f"  Formatter {self.formatter_id}: Public key not available for record [{record.name}/{record.levelname}]. "
+                    f"Logging plain to file: '{log_message_to_process[:100]}...'"
+                )
+            # msg_for_formatting and args_for_formatting correctly remain as original_msg, original_args
+        
+        else: # log_message_to_process is empty (e.g. logger.info(""))
+            _internal_logger.debug(f"  Formatter {self.formatter_id}: log_message_to_process is empty. Skipping encryption.")
+            # msg_for_formatting and args_for_formatting correctly remain as original_msg, original_args
+
+        # Temporarily modify record.msg and record.args for the call to super().format()
+        record.msg = msg_for_formatting
+        record.args = args_for_formatting
+        
+        _internal_logger.debug(f"  Formatter {self.formatter_id}: Before super().format(), record.msg is: '{str(record.msg)[:100]}...' (args {'present and non-empty' if record.args else 'cleared or empty'})")
+        
+        # Let the base Formatter do its job.
+        # super().format(record) will:
+        # 1. Call record.getMessage() using the (potentially modified) record.msg and record.args.
+        # 2. Store the result in record.message.
+        # 3. Format the entire log string using its format string (_fmt) and record.__dict__ (which includes the new record.message).
+        # 4. If record.exc_info is present, it will format it and store it in record.exc_text (if not already there or if self.usesExceptionText() is true).
+        formatted_log_string = super().format(record)
+        _internal_logger.debug(f"  Formatter {self.formatter_id}: After super().format(), formatted_log_string is: '{formatted_log_string[:100]}...'")
+        
+        # --- CRITICAL: Restore record state for other handlers ---
+        # This ensures that other handlers processing the same LogRecord instance
+        # will use the original message and arguments.
+        record.msg = original_msg
+        record.args = original_args
+        
+        # Restore exc_text to its state before this formatter ran.
+        # If super().format() populated it, and original_exc_text was None,
+        # this sets it back to None. Subsequent formatters will recompute if needed.
+        # If original_exc_text was already populated (e.g., by a prior custom formatter), this restores it.
+        record.exc_text = original_exc_text
+        
+        # record.message is left as whatever super().format() set it to.
+        # The next handler's formatter will call record.getMessage() again (using the now-restored msg/args),
+        # and will overwrite record.message with its own formatted version. This is standard and expected.
+        
+        _internal_logger.debug(f"  Formatter {self.formatter_id}: record.msg, record.args, record.exc_text RESTORED to their original states for subsequent handlers.")
+        _internal_logger.debug(f"--- EncryptedFormatter {self.formatter_id} format() COMPLETED for record: {record.name} - {record.levelname} ---")
+        
+        return formatted_log_string
+
+# --- Application Logger (Fo76Bot) ---
 logger = logging.getLogger('Fo76Bot')
 
 def setup_logger():
-    logger.setLevel(logging.DEBUG)  # Capture all levels from DEBUG upwards
+    _internal_logger.info(f"--- Running setup_logger() for '{logger.name}' ---")
+    
+    if logger.hasHandlers():
+        _internal_logger.debug(f"Clearing existing handlers for '{logger.name}' logger.")
+        logger.handlers.clear()
 
-    # File Handler - logs INFO and higher
-    fh = logging.handlers.RotatingFileHandler(LOG_FILENAME, maxBytes=5*1024*1024, backupCount=3, mode='a') # 5MB per file, 3 backups
-    fh.setLevel(logging.INFO)
+    logger.setLevel(logging.DEBUG) # Set level on the logger itself
+    log_format_str = '%(asctime)s - %(name)s - %(levelname)s - %(module)s.%(funcName)s:%(lineno)d - %(message)s'
 
-    # Console Handler - logs DEBUG and higher (for real-time feedback)
-    ch = logging.StreamHandler()
-    ch.setLevel(logging.DEBUG)
+    active_public_key_pem = None
+    # Check for a generic placeholder string within the hardcoded key
+    if "yReplaceWithYourKey" in HARDCODED_PUBLIC_KEY_PEM: # A common pattern for placeholders
+        _internal_logger.critical(
+            "FATAL: Placeholder public key detected in HARDCODED_PUBLIC_KEY_PEM based on 'yReplaceWithYourKey' string. File logging will NOT be encrypted."
+        )
+    else:
+        active_public_key_pem = HARDCODED_PUBLIC_KEY_PEM
+        _internal_logger.info("Actual public key PEM will be used for EncryptedFormatter.")
 
-    # Formatter
-    formatter = logging.Formatter('%(asctime)s - %(name)s - %(levelname)s - %(module)s.%(funcName)s:%(lineno)d - %(message)s')
-    fh.setFormatter(formatter)
-    ch.setFormatter(formatter)
+    # File Handler - Encrypted
+    file_handler_level = logging.INFO
+    fh = logging.handlers.RotatingFileHandler(
+        LOG_FILENAME, maxBytes=5*1024*1024, backupCount=3, mode='a', encoding='utf-8'
+    )
+    fh.setLevel(file_handler_level) # Handler level
+    encrypted_formatter = EncryptedFormatter(log_format_str, public_key_pem_string=active_public_key_pem, file_handler_level=file_handler_level)
+    fh.setFormatter(encrypted_formatter)
+    logger.addHandler(fh)
+    _internal_logger.info(f"Added RotatingFileHandler to '{logger.name}' with EncryptedFormatter (ID: {id(encrypted_formatter)}, Level: {logging.getLevelName(file_handler_level)}).")
 
-    # Add handlers to the logger
-    if not logger.handlers: # Avoid adding multiple handlers if script is re-run in some environments
-        logger.addHandler(fh)
-        logger.addHandler(ch)
-# --- End Logger Setup ---
+    # Console Handler - Plain Text
+    console_handler_level = logging.DEBUG
+    ch = logging.StreamHandler(sys.stdout) # Explicitly use stdout for application logs
+    ch.setLevel(console_handler_level) # Handler level
+    plain_formatter = logging.Formatter(log_format_str)
+    ch.setFormatter(plain_formatter)
+    logger.addHandler(ch)
+    _internal_logger.info(f"Added StreamHandler to '{logger.name}' with plain_formatter (Level: {logging.getLevelName(console_handler_level)}).")
+
+    logger.propagate = False # Prevent passing to root logger
+    _internal_logger.info(f"Set '{logger.name}.propagate = False'.")
+
+    _internal_logger.info(f"--- setup_logger() for '{logger.name}' COMPLETED ---")
+    
+    # Test log messages immediately after setup
+    # These will be processed by both handlers if their levels permit.
+    logger.info("Fo76Bot logger setup complete. File logs (INFO+) should be encrypted. Console logs (DEBUG+) plain.")
+    logger.debug("This is a Fo76Bot DEBUG message (Console only, plain).") # Below INFO, so only console
+    try:
+        1 / 0
+    except ZeroDivisionError:
+        # exc_info=True will cause exception info to be added to the LogRecord
+        logger.error("Fo76Bot ERROR with exception (File encrypted, Console plain).", exc_info=True)
+
+# Example of how to run (if this were the main script)
+if __name__ == '__main__':
+    _internal_logger.info(f"Running example usage from __main__ in {_LOGGING_MODULE_NAME}")
+    setup_logger()
+    logger.warning("This is a test WARNING message after setup.")
+    logger.info("Another INFO message for testing: User %s logged in.", "test_user")
+    logger.info("") # Test with empty message
+    _internal_logger.info("Example usage finished.")
+
 
 falloutpath = None
 
@@ -303,7 +546,7 @@ def premainmenu():
 def openmap():
     scoreicon = 'icons/scoreicon.png'
     dailyops = 'icons/tester.png'
-    max_failcount = 5
+    max_failcount = 2
     
     for fail_attempt in range(max_failcount):
         scorepos_list = find_icon_positions(scoreicon)
@@ -334,12 +577,7 @@ def openmap():
             logger.info("Detected main menu while trying to open map. Aborting openmap.")
             return False
 
-        current_ui_text = readui(False, 1).lower()
-        if "respawn" in current_ui_text:
-            logger.info("Found 'respawn' in UI text. Pressing space.")
-            inputs.press("space", 0.1)
-            time.sleep(1)
-            continue
+        
         
         logger.warning(f"Map not identified after 'm' press (attempt {fail_attempt + 1}/{max_failcount}). Retrying.")
         time.sleep(5)
@@ -758,10 +996,10 @@ def dead():
             map_still_open_after_click = mapclick(x, y)
             if not map_still_open_after_click:
                 logger.info("Respawn point likely selected or map closed during search.")
-                break 
+                return True
             current_stage_clicks +=1
         
-        if not map_still_open_after_click: break
+        if not map_still_open_after_click: return True
 
         stage += 1
         if stage > 6:
@@ -775,7 +1013,7 @@ def dead():
         iterations_done += 1
         if iterations_done >= max_spiral_iterations:
             logger.warning("Max spiral iterations reached for dead/respawn. Aborting search.")
-            break
+            return False
     
     if find_icon_positions("icons/scoreicon.png"): 
         logger.info("Closing map after respawn search attempt.")
@@ -807,13 +1045,18 @@ def ismainmenu():
         return False
 
 def event():
+    findevent()
+    
     return
 
 def noevent():
     return
 
 def decisionTree():
+    if not switch_to_application("Fallout76"):
+        return False
     
+    # Scans for images
     # 0: Menu, 1: Map Event, 2: Ok, 3: Overweight, 4: Score, 5: Daily Ops, 6: Watericon
     iconList =  [find_icon_positions("icons/menuicon.png"),
     find_icon_positions("icons/lowresicon.png"), # Event map icon
@@ -824,38 +1067,43 @@ def decisionTree():
     find_icon_positions("icons/watericon.png")]
     iconBoolList = [] # 0: Menu, 1: Map Event, 2: Ok, 3: Overweight, 4: Score, 5: Daily Ops, 6: Watericon
     
-    logger.info(f"iconList:\n{resultTable}")
+    logger.info(f"iconList:\n{iconList}")
     if iconList[2] != []: return okcheck() # Returns true/false
-    
+    iconCount = 0
     for icon in iconList: 
         if icon != []:
             iconBoolList.append(True)
             iconCount += 1
         else:
             iconBoolList.append(False)
-    logger.info(f"iconBoolList:\n{resultTable}")
+    logger.info(f"iconBoolList:\n{iconBoolList}")
+    
+    # Reads screen
     uiText = readui(False, 1)
-    uiText = uiText.split(' ')
+    uiText = f"{uiText} {readui(False, 0)}"
+    print(uiText)
+    uiText = uiText.split()
     logger.info(f"uiText:\n{uiText}")
+
     # Dictionairy init
-    preMainDict = {"press" : 0, "any" : 1, "button" : 2, "start" : 3, "continue" : 4}
+    preMainDict = {"press" : 0, "any" : 1, "button" : 2, "start" : 3, "continue" : 4, "tab)" : 5}
     generalNavDict = {"tab)" : 0, "t)" : 1, "enter)" : 2, "respawn" : 3}
     eventDict = {"event" : 0, "event:" : 1}
     loadingDict = {"loading" : 4, "by...": 5, "loading." : 7, "loading.." : 8, "loading..." : 9}
     
     # Read ui results formatting/init
-    resultTable = [] # 0: Premain results, 1: General Nav results, 2: Event results, 3: Loading results
+    resultTable = [[],[],[],[],[]] # 0: Premain results, 1: General Nav results, 2: Event results, 3: Loading results
     preMainCount = 0
     generalNavCount = 0
     eventCount = 0
     loadingCount = 0
     for item in uiText:
+        
         itm = f"{item.strip()}"
-        print(itm)
         try:
             resultTable[0].append(preMainDict[itm])
             preMainCount += 1
-        except TypeError:
+        except KeyError:
             True
         except Exception as e:
             import traceback
@@ -863,7 +1111,7 @@ def decisionTree():
         try:
             resultTable[1].append(generalNavDict[itm])
             generalNavCount += 1
-        except TypeError:
+        except KeyError:
             True
         except Exception as e:
             import traceback
@@ -871,7 +1119,7 @@ def decisionTree():
         try:
             resultTable[2].append(eventDict[itm])
             eventCount += 1
-        except TypeError:
+        except KeyError:
             True
         except Exception as e:
             import traceback
@@ -879,7 +1127,7 @@ def decisionTree():
         try:
             resultTable[3].append(loadingDict[itm])
             loadingCount += 1
-        except TypeError:
+        except KeyError:
             True
         except Exception as e:
             import traceback
@@ -888,9 +1136,15 @@ def decisionTree():
     logger.info(f"ReadUI Result Table:\n{resultTable}")
     
     # If no icons are found
-    if iconCount < 0:
+    if iconCount == 0:
+        # Loading
+        if loadingCount > 0:
+            logger.info("Loading...")
+            time.sleep(5)
+            return True
+        
         # Premain menu
-        if preMainCount > 0:
+        if preMainCount > 1:
             premainBool = True
             for item in iconList:
                 if item != []: 
@@ -898,34 +1152,50 @@ def decisionTree():
                     logger.info("preMain words found but icon also found, assuming not preMainMenu.")
                     break
             if premainBool:
-                logger.info("pre main menu identified")
-                return premainmenu() # Returns true/false
+                logger.info("pre main menu identified.")
+                inputs.press("tab", 0.1)
+                time.sleep(0.3)
+                inputs.press("tab", 0.1)
+                time.sleep(5)
+                return True
 
+        if 3 in resultTable[1]: return dead()
+        hehe = openmap()
+        if hehe and eventCount == 0 and not findevent(): return leave()
+        elif not hehe:
+            inputs.press("tab", 0.1)
+            time.sleep(0.1)
+            inputs.press("space", 0.1)
+        closemap()
+        logger.info("Player still in event...")
+        time.sleep(20)
+        return True
     
     
     # 0: Menu, 1: Map Event, 2: Ok, 3: Overweight, 4: Score, 5: Daily Ops, 6: Watericon
-    match iconList:
-        case [True, False, False, False, True, False, False]: # At Main menu
+    match iconBoolList:
+        case [True, False, False, False, False, False, False]: # At Main menu
             return join() # Returns true/false
         case [False, False, False, False, True, True, False]: # Map open, no event
-            return noevent()
+            return leave() # Returns true/false
         case [False, True, False, False, True, True, False]: # Map open, is event
-            return event()
-    
-    
+            if findevent():
+                time.sleep(5)
+                return True
+            return False
+        case [False, False, False, False, False, False, True]: # Loaded in
+            # If Not In Event
+            if eventCount == 0:
+                openmap()
+                if not findevent(): return leave() # Returns true/false
+            # if In Event
+            return True
         
-    # Main Menu
-    if preMainCount > 0:
-        premainBool = True
-        for item in iconList:
-            if item != []: 
-                premainBool = False
-                logger.info("preMain words found but icon also found, assuming not preMianMenu.")
-                break
-        if premainBool:
-            return premainmenu() # Returns true/false
+    # Failure to decide
+    logger.error(f"Decision Tree Failure. Could not recognise anything.")
+    return False
 
-def main(tesseract_path=r'C:\Program Files\Tesseract-OCR\tesseract.exe', fallout_path=r'F:\SteamLibrary\steamapps\common\Fallout76\Fallout76.exe'):
+def main1(tesseract_path=r'C:\Program Files\Tesseract-OCR\tesseract.exe', fallout_path=r'F:\SteamLibrary\steamapps\common\Fallout76\Fallout76.exe'):
     global falloutpath, leavefail, lastss, numofevents
     falloutpath = fallout_path
     tesseract_path_init(tesseract_path)
@@ -1089,6 +1359,11 @@ def main(tesseract_path=r'C:\Program Files\Tesseract-OCR\tesseract.exe', fallout
 
         logger.info("Bot cycle completed. Going back to start.")
 
-if __name__ == "__main__":  
+def main(tesseract_path=r'C:\Program Files\Tesseract-OCR\tesseract.exe', fallout_path=r'F:\SteamLibrary\steamapps\common\Fallout76\Fallout76.exe'):
+    global falloutpath, leavefail, lastss, numofevents
+    falloutpath = fallout_path
+    tesseract_path_init(tesseract_path)
+    
     setup_logger() # Initialize the logger
-    decisionTree()
+    while decisionTree():
+        time.sleep(1)
