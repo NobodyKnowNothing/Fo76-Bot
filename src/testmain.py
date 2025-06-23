@@ -5,7 +5,6 @@ import win32con
 import win32gui
 from press import WindowsInputSimulator
 from input import click
-from emailapi import send_email
 import datetime
 import pyautogui
 import os
@@ -447,8 +446,6 @@ def debugscreenshot():
             raise RuntimeError("Fallout76 not running, screenshot attempt aborted.")
 
         current_datetime = datetime.datetime.now()
-        if abs(current_datetime - lastss).total_seconds() <= 180:
-            send_email("[Fo76 Bot] Screenshots taken less then 3 mins apart", "Logic error maybe or frequent issues.")
         
         logger.info(f"Attempting screenshot at: {current_datetime}.")
         directory = 'debug'
@@ -464,10 +461,8 @@ def debugscreenshot():
         
     except RuntimeError as e:
         logger.warning(f"Screenshot pre-condition failed: {e}")
-        send_email("[Fo76 Bot] Debug screenshot pre-condition fail", str(e))
     except Exception as e:
         logger.exception("Failed to take or save a screenshot:")
-        send_email("[Fo76 Bot] Debug screenshot failure", f"Error: {e}. Storage space limited maybe?")
     
     return "" # Original function returned empty string
 
@@ -602,7 +597,7 @@ def findevent():
     try:
         max_join_attempts = 3
         for attempt in range(max_join_attempts):
-            icons_list = find_icon_positions(icon_path)
+            icons_list = find_icon_positions(icon_path) + find_icon_positions('icons/mutieevent.png')
             if not icons_list:
                 logger.info("Event icon not found on map.")
                 closemap()
@@ -627,8 +622,6 @@ def findevent():
 
             if find_icon_positions(overweight_icon):
                 logger.warning("Player overweight, cannot fast travel to event.")
-                send_email("[FO76 Bot] Player overweight, action needed",
-                           "Bot failed to fast travel due to weight, please fix.")
                 exit(1)
 
             if not find_icon_positions('icons/scoreicon.png'):
@@ -689,7 +682,6 @@ def whenplayerload():
             logger.info("Handled an 'OK' popup during load check.")
 
     logger.error("Load time exceeded 2 minutes. Assuming fatal error.")
-    send_email("[Fo76 Bot] Load time took >2 mins", "Fatal error likely, player not detected in game.")
     debugscreenshot()
     return False
 
@@ -702,14 +694,11 @@ def leave():
         logger.warning("Could not open map to initiate leaving sequence.")
         if ismainmenu():
             logger.info("Already at main menu.")
-            if leavefail >= 10:
-                 send_email("[FO76 Bot] Bot left game successfully, disregard last",
-                            "Bot failed to leave game 10 times in a row but then succeeded again")
             leavefail = 0
             return True
         return False 
 
-    max_leave_attempts = 5
+    max_leave_attempts = 2
     for attempt_num in range(max_leave_attempts):
         if not fo76running():
             logger.warning("Game closed during leave attempt.")
@@ -717,9 +706,7 @@ def leave():
 
         if ismainmenu():
             logger.info("Successfully reached main menu.")
-            if leavefail >= 10:
-                 send_email("[FO76 Bot] Bot left game successfully, disregard last",
-                            "Bot failed to leave game 10 times in a row but then succeeded again")
+
             leavefail = 0
             return True
 
@@ -750,10 +737,9 @@ def leave():
     
     logger.error("Failed to leave to main menu after all attempts.")
     if leavefail == 9: 
-        send_email("[FO76 Bot] Failed to leave game 10 times",
-                   "Bot failed to leave game 10 times in a row, unknown error likely")
+        logger.error("Leave attempts failed 9 times in a row, assuming persistent issue.")
     leavefail += 1
-    return False
+    return True
 
 
 def join():
@@ -1059,7 +1045,7 @@ def decisionTree():
     # Scans for images
     # 0: Menu, 1: Map Event, 2: Ok, 3: Overweight, 4: Score, 5: Daily Ops, 6: Watericon
     iconList =  [find_icon_positions("icons/menuicon.png"),
-    find_icon_positions("icons/lowresicon.png"), # Event map icon
+    find_icon_positions("icons/lowresicon.png") + find_icon_positions("icons/mutieevent.png"), # Event map icon
     find_icon_positions("icons/ok.png"),
     find_icon_positions("icons/overweight.png"),
     find_icon_positions("icons/scoreicon.png"), 
@@ -1137,6 +1123,7 @@ def decisionTree():
     
     # If no icons are found
     if iconCount == 0:
+        
         # Loading
         if loadingCount > 0:
             logger.info("Loading...")
@@ -1158,7 +1145,7 @@ def decisionTree():
                 inputs.press("tab", 0.1)
                 time.sleep(5)
                 return True
-
+        
         if 3 in resultTable[1]: return dead()
         hehe = openmap()
         if hehe and eventCount == 0 and not findevent(): return leave()
@@ -1167,12 +1154,18 @@ def decisionTree():
             time.sleep(0.1)
             inputs.press("space", 0.1)
         closemap()
-        logger.info("Player still in event...")
-        time.sleep(20)
+        # This code isnt used, but kept for reference
+        """if 1 <= resultTable[2]: 
+            inputs.press("space", 0.1)
+            logger.info("Player still in event.")
+            time.sleep(5)
+            return True"""
+        logger.info("Player still in event or stuck in pre-main menu.")
+        time.sleep(10)
         return True
     
     
-    # 0: Menu, 1: Map Event, 2: Ok, 3: Overweight, 4: Score, 5: Daily Ops, 6: Watericon
+    # 0: Menu, 1: Map Event, 2: Ok, 3: Overweight, 4: Score, 5: Daily Ops, 6: Watericon, 7: mutie event icon
     match iconBoolList:
         case [True, False, False, False, False, False, False]: # At Main menu
             return join() # Returns true/false
@@ -1192,10 +1185,12 @@ def decisionTree():
             return True
         
     # Failure to decide
-    logger.error(f"Decision Tree Failure. Could not recognise anything.")
-    return False
+    if len(resultTable[1]) >= 1: inputs.press("tab", 0.1)
+    else:
+        logger.error(f"Decision Tree Failure. Could not recognise anything.") 
+        return False
 
-def main1(tesseract_path=r'C:\Program Files\Tesseract-OCR\tesseract.exe', fallout_path=r'F:\SteamLibrary\steamapps\common\Fallout76\Fallout76.exe'):
+"""ef main1(tesseract_path=r'C:\Program Files\Tesseract-OCR\tesseract.exe', fallout_path=r'F:\SteamLibrary\steamapps\common\Fallout76\Fallout76.exe'):
     global falloutpath, leavefail, lastss, numofevents
     falloutpath = fallout_path
     tesseract_path_init(tesseract_path)
@@ -1357,7 +1352,7 @@ def main1(tesseract_path=r'C:\Program Files\Tesseract-OCR\tesseract.exe', fallou
             debugscreenshot()
             continue
 
-        logger.info("Bot cycle completed. Going back to start.")
+        logger.info("Bot cycle completed. Going back to start.")"""
 
 def main(tesseract_path=r'C:\Program Files\Tesseract-OCR\tesseract.exe', fallout_path=r'F:\SteamLibrary\steamapps\common\Fallout76\Fallout76.exe'):
     global falloutpath, leavefail, lastss, numofevents
