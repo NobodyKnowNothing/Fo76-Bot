@@ -24,3 +24,4 @@ src/icons/Fallout76_05-13-20-36.dmp
 src/icons/north.png
 src/icons/playermapicon.png
 *.pyc
+/src/__pycache__

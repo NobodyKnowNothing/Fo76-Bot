@@ -690,7 +690,7 @@ def leave():
             logger.info("Already at main menu.")
             leavefail = 0
             return True
-        return False 
+        return True # Cannot proceed to leave if map can't be opened, true because it is not a failure of leaving itself but of preconditions
 
     max_leave_attempts = 2
     for attempt_num in range(max_leave_attempts):
