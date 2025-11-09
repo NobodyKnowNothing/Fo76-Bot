@@ -291,7 +291,7 @@ def check_user():
         status_label.config(text="User ID cannot be empty!", fg="red")
         return
 
-    url = f"https://rust-bot-auth-744976866854.us-central1.run.app/check_patron/{entered_password}"
+    url = f"http://127.0.0.1:8080/check_patron/{entered_password}"
     result = call_url(url, method="GET")
 
     if result['success'] and result['data'] and result['data'].get('is_patron'):
@@ -334,7 +334,7 @@ def setup_login_window(window):
             patron_id = cache[0].strip() if cache[0] else None
 
         if patron_id:
-            url = f"https://rust-bot-auth-744976866854.us-central1.run.app/check_patron/{patron_id}"
+            url = f"http://127.0.0.1:8080/check_patron/{patron_id}"
             result = call_url(url, method="GET")
             if result['success'] and result['data'] and result['data'].get('is_patron'):
                 clear_window()

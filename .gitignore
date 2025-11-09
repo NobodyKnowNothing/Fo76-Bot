@@ -6,3 +6,9 @@
 *.log
 *.log
 /src/__pycache__
+/build
+*.log
+/src
+/src/__pycache__
+*.pyc
+*.png

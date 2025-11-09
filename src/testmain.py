@@ -302,7 +302,7 @@ def mposcheck():  # Testing
 def close_exe():
     killed_by_psutil = False
     for proc in psutil.process_iter(['pid', 'name']):
-        if proc.info['name'] == "Fallout76.exe":
+        if proc.info['name'] in ["Fallout76.exe", "Project76_GamePass.exe"]:
             try:
                 proc.kill()
                 killed_by_psutil = True
@@ -332,18 +332,18 @@ def open_exe():
         subprocess.Popen(falloutpath)
         
         wait_tries = 0
-        while not fo76running() and wait_tries < 30:
-            time.sleep(1)
+        while not fo76running() and wait_tries < 6:
+            time.sleep(10)
             wait_tries += 1
         
         if not fo76running():
-            logger.warning("Fallout76.exe did not start after 30 seconds.")
+            logger.warning("Fallout76.exe did not start after 60 seconds.")
             return False
 
         logger.info("Fallout76.exe started. Attempting to switch to window.")
         switch_tries = 0
         while switch_tries < 10:
-            if switch_to_application("Fallout76"):
+            if switch_to_application("Fallout76", open_if_not_found=False):
                 success = True
                 break
             logger.warning(f"Failed to switch window, attempt {switch_tries + 1}. Retrying in 5s.")
@@ -361,11 +361,12 @@ def open_exe():
         success = False
     return success
 
-def switch_to_application(window_title):
+def switch_to_application(window_title, open_if_not_found=True):
     hwnd = win32gui.FindWindow(None, window_title)
     if hwnd == 0:
         logger.warning(f"Window '{window_title}' not found.")
-        return False
+        if open_if_not_found: time.sleep(5)
+        return open_exe() if open_if_not_found else False
 
     max_attempts = 3
     for attempt in range(max_attempts):
@@ -389,10 +390,6 @@ def switch_to_application(window_title):
                      logger.error(f"Failed to bring '{window_title}' to foreground. Current foreground: '{current_fg_window_title}'")
 
 
-        except win32gui.error as e:
-            logger.warning(f"win32gui.error on attempt {attempt + 1} for '{window_title}': {e}")
-            if attempt < max_attempts - 1:
-                time.sleep(1)
         except Exception as e:
             logger.error(f"Unexpected error on attempt {attempt + 1} for '{window_title}': {e}")
             return False 
@@ -402,10 +399,9 @@ def switch_to_application(window_title):
 
 
 def fo76running():
-    process_name = "Fallout76.exe"
     for process in psutil.process_iter(['pid', 'name']):
         try:
-            if process.info['name'] == process_name:
+            if process.info['name'] in ["Fallout76.exe", "Project76_GamePass.exe"]:
                 return True
         except (psutil.NoSuchProcess, psutil.AccessDenied, psutil.ZombieProcess):
             pass
@@ -481,7 +477,7 @@ def closemap():
         max_tries = 4
         for tries_count in range(max_tries):
             inputs.press("m", 0.1)
-            time.sleep(0.7)
+            time.sleep(2)
             
             current_scorepos_list = find_icon_positions(scoreicon)
             current_opspos_list = find_icon_positions(dailyops)
@@ -489,7 +485,9 @@ def closemap():
             if not (current_scorepos_list and current_opspos_list):
                 logger.info("Map closed successfully.")
                 return True
-            
+            else:
+                inputs.press("tab", 0.1)
+                time.sleep(1)
             if tries_count == max_tries - 1:
                 logger.warning(f"Couldn't close map after {max_tries} tries.")
                 return False
@@ -541,8 +539,8 @@ def premainmenu():
 def openmap():
     scoreicon = 'icons/scoreicon.png'
     dailyops = 'icons/tester.png'
-    max_failcount = 2
-    
+    max_failcount = 1
+    okcheck()
     for fail_attempt in range(max_failcount):
         scorepos_list = find_icon_positions(scoreicon)
         opspos_list = find_icon_positions(dailyops)
@@ -553,7 +551,7 @@ def openmap():
             return True
 
         inputs.press("m", 0.1)
-        time.sleep(0.7)
+        time.sleep(3)
 
         scorepos_list_after_press = find_icon_positions(scoreicon)
         opspos_list_after_press = find_icon_positions(dailyops)
@@ -567,10 +565,6 @@ def openmap():
             logger.info("Score icon found post 'm' press, but not dailyops. Checking for dead state.")
             dead()
             continue 
-
-        if ismainmenu():
-            logger.info("Detected main menu while trying to open map. Aborting openmap.")
-            return False
 
         
         
@@ -948,6 +942,7 @@ def pipboyeventcheck():
 
 def dead():
     logger.info("Player is dead or needs respawn. Searching for respawn location on map.")
+    
 
     x, y = 640, 400 
     mult = 1
@@ -957,7 +952,7 @@ def dead():
     max_spiral_iterations = 50 
     iterations_done = 0
     map_still_open_after_click = True 
-
+    time.sleep(5)
     while map_still_open_after_click and iterations_done < max_spiral_iterations:
         current_stage_clicks = 0
         target_clicks_in_stage = 0
@@ -1073,9 +1068,10 @@ def decisionTree():
 
     # Dictionairy init
     preMainDict = {"press" : 0, "any" : 1, "button" : 2, "start" : 3, "continue" : 4, "tab)" : 5}
-    generalNavDict = {"tab)" : 0, "t)" : 1, "enter)" : 2, "respawn" : 3}
+    generalNavDict = {"tab)" : 0, "t)" : 1, "enter)" : 2, "respawn" : 3, "back": 4}
     eventDict = {"event" : 0, "event:" : 1}
     loadingDict = {"loading" : 4, "by...": 5, "loading." : 7, "loading.." : 8, "loading..." : 9}
+    badeventDict = {"free" : 0, "range" : 1, "load" : 2, "baring" : 3} # "feed" : 0, "the" : 1, "people" : 2, "beasts" : 3, "of" : 4, "burden" : 5, "distinguished" : 6, "guests" : 7, "jail" : 8, "break" : 9, }
     
     # Read ui results formatting/init
     resultTable = [[],[],[],[],[]] # 0: Premain results, 1: General Nav results, 2: Event results, 3: Loading results
@@ -1083,6 +1079,7 @@ def decisionTree():
     generalNavCount = 0
     eventCount = 0
     loadingCount = 0
+    badEventCount = 0
     for item in uiText:
         
         itm = f"{item.strip()}"
@@ -1118,6 +1115,14 @@ def decisionTree():
         except Exception as e:
             import traceback
             print(traceback.format_exc())
+        try:
+            resultTable[4].append(badeventDict[itm])
+            badEventCount += 1
+        except KeyError:
+            True
+        except Exception as e:
+            import traceback
+            print(traceback.format_exc())
     
     logger.info(f"ReadUI Result Table:\n{resultTable}")
     
@@ -1146,9 +1151,13 @@ def decisionTree():
                 time.sleep(5)
                 return True
         
-        if 3 in resultTable[1]: return dead()
-        hehe = openmap()
-        if hehe and eventCount == 0 and not findevent(): return leave()
+        if 3 in resultTable[1]: return dead() # Respawn
+        
+        if badEventCount > 1 and eventCount > 0: return leave() # Bad event detected, leave
+        
+        hehe = openmap() # Check if in game
+        
+        if hehe and eventCount == 0 and not findevent(): return leave() # Not in event, leave
         elif not hehe:
             inputs.press("tab", 0.1)
             time.sleep(0.1)
@@ -1160,8 +1169,11 @@ def decisionTree():
             logger.info("Player still in event.")
             time.sleep(5)
             return True"""
+            
+        if generalNavCount > 0: inputs.press("tab", 0.1)
         logger.info("Player still in event or stuck in pre-main menu.")
-        time.sleep(10)
+        if eventCount > 0: time.sleep(10)
+        else: time.sleep(2)
         return True
     
     
@@ -1360,5 +1372,8 @@ def main(tesseract_path=r'C:\Program Files\Tesseract-OCR\tesseract.exe', fallout
     tesseract_path_init(tesseract_path)
     
     setup_logger() # Initialize the logger
-    while decisionTree():
+    while True:
+        if decisionTree() == False:
+            close_exe()
+            time.sleep(5)
         time.sleep(1)
