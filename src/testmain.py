@@ -9,7 +9,18 @@ import datetime
 import pyautogui
 import os
 from readtext import readui, tesseract_path_init
+import sys
+import os
 
+def resource_path(relative_path):
+    """ Get absolute path to resource, works for dev and for PyInstaller """
+    try:
+        # PyInstaller creates a temp folder and stores path in _MEIPASS
+        base_path = sys._MEIPASS
+    except Exception:
+        base_path = os.path.abspath(".")
+
+    return os.path.join(base_path, relative_path)
 
 # --- Logger Setup ---
 import logging
@@ -410,6 +421,7 @@ def fo76running():
 
 def find_icon_positions(icon_image):
     try:
+        icon_image = resource_path(icon_image)
         icon_locations = list(pyautogui.locateAllOnScreen(icon_image, confidence=0.9))
         if icon_locations:
             icon_positions = []
@@ -686,10 +698,6 @@ def leave():
 
     if not openmap():
         logger.warning("Could not open map to initiate leaving sequence.")
-        if ismainmenu():
-            logger.info("Already at main menu.")
-            leavefail = 0
-            return True
         return True # Cannot proceed to leave if map can't be opened, true because it is not a failure of leaving itself but of preconditions
 
     max_leave_attempts = 2
@@ -1071,7 +1079,7 @@ def decisionTree():
     generalNavDict = {"tab)" : 0, "t)" : 1, "enter)" : 2, "respawn" : 3, "back": 4}
     eventDict = {"event" : 0, "event:" : 1}
     loadingDict = {"loading" : 4, "by...": 5, "loading." : 7, "loading.." : 8, "loading..." : 9}
-    badeventDict = {"free" : 0, "range" : 1, "load" : 2, "baring" : 3} # "feed" : 0, "the" : 1, "people" : 2, "beasts" : 3, "of" : 4, "burden" : 5, "distinguished" : 6, "guests" : 7, "jail" : 8, "break" : 9, }
+    badeventDict = {"free" : 0, "range" : 1}#, "load" : 2, "baring" : 3}# "moonshine" : 4, "jamboree" : 5} # "feed" : 0, "the" : 1, "people" : 2, "beasts" : 3, "of" : 4, "burden" : 5, "distinguished" : 6, "guests" : 7, "jail" : 8, "break" : 9, }
     
     # Read ui results formatting/init
     resultTable = [[],[],[],[],[]] # 0: Premain results, 1: General Nav results, 2: Event results, 3: Loading results

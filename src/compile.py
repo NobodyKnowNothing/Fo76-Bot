@@ -24,8 +24,8 @@ DATA_TO_BUNDLE = [
 
 # --- Paths ---
 SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
-BUILD_DIR = os.path.join(SCRIPT_DIR, "build_temp_fo76") # Temporary directory for preparing files
-DIST_DIR = os.path.join(SCRIPT_DIR, "dist_fo76_bot")    # Where the final bundled app will be
+BUILD_DIR = os.path.join("D:\\", "Fo76Bot_Build", "build_temp") # Use D: drive for temp build
+DIST_DIR = os.path.join("D:\\", "Fo76Bot_Build", "dist")    # Use D: drive for output
 PYINSTALLER_WORK_DIR = os.path.join(BUILD_DIR, "pyinstaller_work")
 PYINSTALLER_SPEC_DIR = BUILD_DIR
 
@@ -158,6 +158,7 @@ def run_pyinstaller(pyinstaller_path):
         "--distpath", DIST_DIR,
         "--workpath", PYINSTALLER_WORK_DIR,
         "--specpath", PYINSTALLER_SPEC_DIR,
+        "--log-level=WARN", # Reduce console output
     ]
 
     # Add data files (e.g., icons folder)
@@ -174,6 +175,19 @@ def run_pyinstaller(pyinstaller_path):
     # cmd.append("--hidden-import=pynput.keyboard._win32")
     # cmd.append("--hidden-import=pynput.mouse._win32")
     # cmd.append("--hidden-import=pynput.keyboard") # If using older pynput
+    
+    # Exclude heavy unnecessary modules - only include what's actually needed:
+    # Required: pytesseract, cv2, numpy, PIL, pyautogui, pynput, psutil, requests, cryptography, win32 libs
+    unnecessary_modules = [
+        "torch", "tensorflow", "matplotlib", "pandas", "scipy", "IPython", 
+        "notebook", "sklearn", "xformers", "triton", "sympy", "numba",
+        "jax", "jaxlib", "keras", "seaborn", "plotly", "bokeh", "dash",
+        "statsmodels", "networkx", "nltk", "spacy", "gensim",
+        "jupyter", "ipykernel", "ipywidgets", "pytest", "sphinx",
+        "black", "pylint", "mypy", "flake8", "coverage"
+    ]
+    for module in unnecessary_modules:
+        cmd.append(f"--exclude-module={module}")
 
     cmd.append(entry_script_path) # The main script for PyInstaller to process
 
@@ -184,18 +198,14 @@ def run_pyinstaller(pyinstaller_path):
         # It's often better to run PyInstaller from the directory containing the .spec file
         # or the main script, but with full paths, it should be fine.
         # For simplicity, run from SCRIPT_DIR.
-        process = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, cwd=SCRIPT_DIR)
-        stdout, stderr = process.communicate()
+        # Use subprocess.run instead of Popen to show real-time output
+        result = subprocess.run(cmd, cwd=SCRIPT_DIR)
 
-        if process.returncode == 0:
+        if result.returncode == 0:
             print("\nPyInstaller completed successfully!")
             print(f"Output executable and associated files are in: {os.path.join(DIST_DIR, OUTPUT_EXE_NAME)}")
         else:
             print("\nERROR: PyInstaller failed.")
-            print("Stdout:")
-            print(stdout.decode(errors='ignore'))
-            print("Stderr:")
-            print(stderr.decode(errors='ignore'))
             sys.exit(1)
             
     except FileNotFoundError:
