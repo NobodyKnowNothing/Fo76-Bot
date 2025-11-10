@@ -1027,7 +1027,7 @@ def perkselect():
 
 
 def ismainmenu():
-    if find_icon_positions("icons/menuicon.png"):
+    if find_icon_positions("icons/menuicon.png") or find_icon_positions("icons/fo1menuicon.png"):
         logger.debug("Menu identified.") # Changed to debug as it can be frequent
         return True
     else:
@@ -1047,8 +1047,8 @@ def decisionTree():
     
     # Scans for images
     # 0: Menu, 1: Map Event, 2: Ok, 3: Overweight, 4: Score, 5: Daily Ops, 6: Watericon
-    iconList =  [find_icon_positions("icons/menuicon.png"),
-    find_icon_positions("icons/lowresicon.png") + find_icon_positions("icons/mutieevent.png"), # Event map icon
+    iconList =  [find_icon_positions("icons/menuicon.png") + find_icon_positions("icons/fo1menuicon.png"), # Menu icon
+    find_icon_positions("icons/mutieevent.png") + find_icon_positions("icons/lowresicon.png"), # Event map icon
     find_icon_positions("icons/ok.png"),
     find_icon_positions("icons/overweight.png"),
     find_icon_positions("icons/scoreicon.png"), 
