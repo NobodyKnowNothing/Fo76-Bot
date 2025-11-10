@@ -354,7 +354,7 @@ def open_exe():
         logger.info("Fallout76.exe started. Attempting to switch to window.")
         switch_tries = 0
         while switch_tries < 10:
-            if switch_to_application("Fallout76", open_if_not_found=False):
+            if switch_to_application("Fallout76", open_if_not_found=False) or switch_to_application("Project76_GamePass", open_if_not_found=False):
                 success = True
                 break
             logger.warning(f"Failed to switch window, attempt {switch_tries + 1}. Retrying in 5s.")
@@ -476,7 +476,6 @@ def debugscreenshot():
 
 
 def closemap():
-    switch_to_application("Fallout76")
     time.sleep(0.3)
     scoreicon = 'icons/scoreicon.png'
     dailyops = 'icons/tester.png'
@@ -516,6 +515,7 @@ def closemap():
 
 def premainmenu():
     switch_to_application("Fallout76")
+    switch_to_application("Project76_GamePass")
     
     if ismainmenu():
         logger.info("Already at main menu, skipping pre-main menu steps.")
@@ -580,8 +580,8 @@ def openmap():
 
         
         
-        logger.warning(f"Map not identified after 'm' press (attempt {fail_attempt + 1}/{max_failcount}). Retrying.")
-        time.sleep(5)
+        # logger.warning(f"Map not identified after 'm' press (attempt {fail_attempt + 1}/{max_failcount}). Retrying.")
+        # time.sleep(5)
 
     logger.error(f"Failed to open map after {max_failcount} attempts.")
     return False
@@ -889,7 +889,7 @@ def mapclick(x, y):
 
 
 def pipboyeventcheck():
-    switch_to_application("Fallout76")
+    switch_to_application("Fallout76") or switch_to_application("Project76_GamePass")
     datatab_icon = "icons/datatab.png"
     eventtab_icon = "icons/eventtab.png"
     scoreicon = "icons/scoreicon.png"
@@ -1010,7 +1010,7 @@ def dead():
 
 def perkselect():
     logger.info("Executing perkselect function (currently minimal).")
-    switch_to_application("Fallout76")
+    switch_to_application("Fallout76") or switch_to_application("Project76_GamePass")
     time.sleep(0.3)
     inputs.press("tab", 0.1)
     time.sleep(0.3)
@@ -1042,7 +1042,7 @@ def noevent():
     return
 
 def decisionTree():
-    if not switch_to_application("Fallout76"):
+    if not (switch_to_application("Fallout76") or switch_to_application("Project76_GamePass")):
         return False
     
     # Scans for images
@@ -1232,7 +1232,7 @@ def decisionTree():
                 logger.info("Game launched successfully.")
                 time.sleep(10) 
         
-        if not switch_to_application("Fallout76"):
+        if not switch_to_application("Fallout76") or switch_to_application("Project76_GamePass"):
             logger.warning("Could not switch to Fallout76 window. Restarting game process.")
             send_email("[Fo76 Bot] Issue: Cannot switch to game window", "Attempting to close and restart game.")
             close_exe()

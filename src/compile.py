@@ -25,7 +25,7 @@ DATA_TO_BUNDLE = [
 # --- Paths ---
 SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
 BUILD_DIR = os.path.join("D:\\", "Fo76Bot_Build", "build_temp") # Use D: drive for temp build
-DIST_DIR = os.path.join("D:\\", "Fo76Bot_Build", "dist")    # Use D: drive for output
+DIST_DIR = os.path.join("D:\\", "Fo76Bot_Build", "dist\\Fo76-Event-Bot")    # Use D: drive for output
 PYINSTALLER_WORK_DIR = os.path.join(BUILD_DIR, "pyinstaller_work")
 PYINSTALLER_SPEC_DIR = BUILD_DIR
 
