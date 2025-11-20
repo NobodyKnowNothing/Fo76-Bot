@@ -164,11 +164,15 @@ def get_cached_data():
         fp1_sec = lines[10].strip()
         use_sec = lines[11].strip().lower() == 'true'
         
-        return r_token, fp1, fp2, fp3, ini_settings, fp1_sec, use_sec
-    except Exception:
-        return None, "", "", "", [], "", False
+        # New fields for alternative INI
+        fp3_sec = lines[12].strip() if len(lines) > 12 else ""
+        # use_sec_ini removed, we use use_sec for both
 
-def save_cached_data(refresh_token, fp1, fp2, fp3, ini_settings, fp1_sec, use_sec):
+        return r_token, fp1, fp2, fp3, ini_settings, fp1_sec, use_sec, fp3_sec
+    except Exception:
+        return None, "", "", "", [], "", False, ""
+
+def save_cached_data(refresh_token, fp1, fp2, fp3, ini_settings, fp1_sec, use_sec, fp3_sec):
     """Saves data to cache.txt."""
     try:
         with open(CACHE_FILE, 'w', encoding='utf-8') as f:
@@ -194,7 +198,8 @@ def save_cached_data(refresh_token, fp1, fp2, fp3, ini_settings, fp1_sec, use_se
                 for _ in range(6): f.write("\n")
             
             f.write(f"{fp1_sec or ''}\n")
-            f.write(f"{'true' if use_sec else 'false'}")
+            f.write(f"{'true' if use_sec else 'false'}\n")
+            f.write(f"{fp3_sec or ''}")
     except Exception as e:
         print(f"Failed to save cache: {e}")
 
@@ -519,8 +524,8 @@ def exchange_code_for_token(code, window):
     
     if is_valid:
         # Save credentials - preserve existing paths if possible, but we are in login flow so maybe we just read what we can
-        _, fp1, fp2, fp3, ini_settings, fp1_sec, use_sec = get_cached_data()
-        save_cached_data(refresh_token, fp1, fp2, fp3, ini_settings, fp1_sec, use_sec)
+        _, fp1, fp2, fp3, ini_settings, fp1_sec, use_sec, fp3_sec = get_cached_data()
+        save_cached_data(refresh_token, fp1, fp2, fp3, ini_settings, fp1_sec, use_sec, fp3_sec)
         
         clear_window()
         setup_main_app_window(window)
@@ -532,7 +537,7 @@ def exchange_code_for_token(code, window):
 
 def attempt_auto_login(window):
     """Runs in a background thread to check cache validity."""
-    cached_refresh, fp1, fp2, fp3, ini_settings, fp1_sec, use_sec = get_cached_data()
+    cached_refresh, fp1, fp2, fp3, ini_settings, fp1_sec, use_sec, fp3_sec = get_cached_data()
     
     if not cached_refresh or len(cached_refresh) < 5:
         # No valid token, stop here and wait for user input
@@ -553,7 +558,7 @@ def attempt_auto_login(window):
         
         if is_member:
             # Success! Save new refresh token
-            save_cached_data(new_refresh, fp1, fp2, fp3, ini_settings, fp1_sec, use_sec)
+            save_cached_data(new_refresh, fp1, fp2, fp3, ini_settings, fp1_sec, use_sec, fp3_sec)
             
             # Switch to main window
             def switch_to_main():
@@ -621,7 +626,7 @@ def setup_main_app_window(root_window):
     status_label_main.pack(side=tk.LEFT, fill=tk.X, expand=True, padx=5)
 
     # --- Load cache for FilePaths ---
-    current_refresh_token, cached_fp1, cached_fp2, cached_fp3, cached_ini, cached_fp1_sec, cached_use_sec = get_cached_data()
+    current_refresh_token, cached_fp1, cached_fp2, cached_fp3, cached_ini, cached_fp1_sec, cached_use_sec, cached_fp3_sec = get_cached_data()
     
     # Defaults
     fp1_val = cached_fp1 if cached_fp1 else "C:\\Program Files\\Fallout76\\Fallout76.exe"
@@ -629,12 +634,14 @@ def setup_main_app_window(root_window):
     user_docs = os.path.expanduser("~\\Documents")
     fp3_val = cached_fp3 if cached_fp3 else os.path.join(user_docs, "My Games", "Fallout 76", "Fallout76Prefs.ini")
     fp1_sec_val = cached_fp1_sec if cached_fp1_sec else ""
+    fp3_sec_val = cached_fp3_sec if cached_fp3_sec else ""
 
     filepath1_var = tk.StringVar(value=fp1_val)
     filepath2_var = tk.StringVar(value=fp2_val)
     filepath3_var = tk.StringVar(value=fp3_val)
     filepath1_sec_var = tk.StringVar(value=fp1_sec_val)
     use_secondary_var = tk.BooleanVar(value=cached_use_sec)
+    filepath3_sec_var = tk.StringVar(value=fp3_sec_val)
     show_secondary_var = tk.BooleanVar(value=False) 
 
     def start_bot_action():
@@ -644,13 +651,19 @@ def setup_main_app_window(root_window):
         fp3 = filepath3_var.get()
         fp1_sec = filepath1_sec_var.get()
         use_sec = use_secondary_var.get()
+        fp3_sec = filepath3_sec_var.get()
 
         # Determine which game path to use
         game_path_to_use = fp1
         if use_sec and show_secondary_var.get(): 
              game_path_to_use = fp1_sec
+        
+        # Determine which INI path to use
+        ini_path_to_use = fp3
+        if use_sec and show_secondary_var.get():
+            ini_path_to_use = fp3_sec
 
-        if not game_path_to_use or not fp2 or not fp3:
+        if not game_path_to_use or not fp2 or not ini_path_to_use:
             messagebox.showwarning("Missing Info", "Please provide all required filepaths.")
             return
 
@@ -662,7 +675,7 @@ def setup_main_app_window(root_window):
             messagebox.showerror("File Not Found", f"Tesseract executable not found:\n{fp2}")
             return
             
-        ini_settings = parse_ini_file(fp3)
+        ini_settings = parse_ini_file(ini_path_to_use)
         if ini_settings is None:
             if status_label_main: status_label_main.config(text="Status: Error - Failed to read INI file.")
             return
@@ -673,8 +686,8 @@ def setup_main_app_window(root_window):
             terminate_bot_process()
 
         # Update cache 
-        curr_token, _, _, _, _, _, _ = get_cached_data()
-        save_cached_data(curr_token, fp1, fp2, fp3, ini_settings, fp1_sec, use_sec)
+        curr_token, _, _, _, _, _, _, _ = get_cached_data()
+        save_cached_data(curr_token, fp1, fp2, fp3, ini_settings, fp1_sec, use_sec, fp3_sec)
 
         try:
             # Pass the selected game path as fp1 (the game executable)
@@ -684,7 +697,7 @@ def setup_main_app_window(root_window):
                 args=(
                     fp2, 
                     game_path_to_use, # Use the selected path
-                    fp3, 
+                    ini_path_to_use, # Use the selected INI path 
                     ini_settings['height'],
                     ini_settings['width'],
                     ini_settings['loc_x'],
@@ -751,8 +764,15 @@ def setup_main_app_window(root_window):
     row_sec_use = tk.Frame(secondary_frame)
     row_sec_use.pack(fill=tk.X, pady=2)
     tk.Label(row_sec_use, width=15).pack(side=tk.LEFT) 
-    use_chk = tk.Checkbutton(row_sec_use, text="Use this version instead of primary", variable=use_secondary_var)
+    use_chk = tk.Checkbutton(row_sec_use, text="Use this configuration instead of primary", variable=use_secondary_var)
     use_chk.pack(side=tk.LEFT)
+
+    # Secondary INI Fields
+    row_sec_ini = tk.Frame(secondary_frame)
+    row_sec_ini.pack(fill=tk.X, pady=2)
+    tk.Label(row_sec_ini, text="Alt Fallout76Prefs.ini:", width=18, anchor='w').pack(side=tk.LEFT) # Slightly wider label
+    tk.Entry(row_sec_ini, textvariable=filepath3_sec_var).pack(side=tk.LEFT, expand=True, fill=tk.X, padx=5)
+    tk.Button(row_sec_ini, text="...", command=lambda: browse(filepath3_sec_var, filetypes=(("INI", "*.ini"),("All", "*.*")))).pack(side=tk.LEFT)
 
     # Tesseract Path
     row2 = tk.Frame(group)
