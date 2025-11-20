@@ -1,34 +1,122 @@
 import tkinter as tk
 from tkinter import messagebox, filedialog
-from testmain import main # Assuming this is the main bot logic
-import multiprocessing # Changed from threading
+import multiprocessing
 import requests
-import json # For handling potential JSONDecodeError explicitly
-# import threading # No longer needed
-from pynput import keyboard as pynput_keyboard # For global hotkey
+import json
+import webbrowser
+import http.server
+import socketserver
+import threading
+import urllib.parse
 import os
 import configparser
 
-# --- Global variables for process management and UI elements ---
-bot_process = None
-status_label_main = None # Will be assigned in setup_main_app_window
-root_tk_instance = None # To store the root Tk instance for closing and bindings
-keyboard_listener = None # For the global pynput keyboard listener
+# Try importing pynput, handle if missing
+try:
+    from pynput import keyboard as pynput_keyboard
+except ImportError:
+    print("Warning: 'pynput' library not found. Global hotkeys (F5) will not work.")
+    pynput_keyboard = None
 
-# --- Functions ---
+# --- Import your bot logic ---
+try:
+    from testmain import main
+except ImportError:
+    # Fallback for testing if testmain is missing
+    def main(fp2, fp1, fp3=None, h=None, w=None, x=None, y=None, fs=None, bl=None):
+        print(f"MOCK BOT RUNNING with {fp1} and {fp2}")
+        import time
+        while True:
+            time.sleep(1)
+
+# --- PATREON CONFIGURATION ---
+PATREON_CLIENT_ID = "4ll9uHw4PikXcPodKO7RbEUtu3D3s4JDgwPKGdwYnh8dM8EB51Ynsg1YHja_goc8"
+PATREON_CLIENT_SECRET = "MT2kVn_mCbhHw8pDZo_-MyqUPVbWyZ8dG_dFzGilC-JkcLHFhOPooMjmF8nO4Wcd"
+PATREON_CAMPAIGN_ID = "2272743"
+REDIRECT_URI = "http://localhost:5000/callback"
+PORT = 5000
+CACHE_FILE = "cache.txt"
+
+# --- Global variables ---
+bot_process = None
+status_label_main = None 
+status_label_login = None
+root_tk_instance = None 
+keyboard_listener = None 
+auth_server = None 
+auth_code = None 
+
+# --- Helper Functions ---
+
+def call_url(
+    url: str,
+    method: str = "GET",
+    params: dict = None,
+    data: dict = None,
+    json_payload: dict = None,
+    headers: dict = None,
+    timeout: int = 15,
+    allow_redirects: bool = True
+    ) -> dict:
+    result = {
+        "success": False,
+        "status_code": None,
+        "content_type": None,
+        "data": None,
+        "headers": None,
+        "error_message": None,
+        "raw_response": None,
+    }
+    try:
+        request_headers = headers if headers else {}
+        if json_payload and 'Content-Type' not in request_headers:
+            request_headers['Content-Type'] = 'application/json'
+        response = requests.request(
+            method=method.upper(),
+            url=url,
+            params=params,
+            data=data if not json_payload else None,
+            json=json_payload,
+            headers=request_headers,
+            timeout=timeout,
+            allow_redirects=allow_redirects
+        )
+        result["raw_response"] = response
+        result["status_code"] = response.status_code
+        result["headers"] = dict(response.headers)
+        result["content_type"] = response.headers.get("Content-Type", "").lower()
+        
+        try:
+            response.raise_for_status()
+        except requests.exceptions.HTTPError:
+             result["error_message"] = f"HTTP {response.status_code}: {response.text}"
+        
+        # Try to parse JSON regardless of content type if it looks like it might be JSON, 
+        # or if the content type suggests it.
+        # Patreon returns application/vnd.api+json which failed the previous strict check.
+        json_parsed = False
+        try:
+            result["data"] = response.json()
+            json_parsed = True
+            if not result["error_message"]: result["success"] = True
+        except json.JSONDecodeError:
+            pass
+            
+        if not json_parsed:
+            if "text/" in result["content_type"]:
+                result["data"] = response.text
+                if not result["error_message"]: result["success"] = True
+            else:
+                result["data"] = response.content
+                if not result["error_message"]: result["success"] = True
+            
+    except Exception as e:
+        result["error_message"] = f"An unexpected error occurred: {e}"
+    return result
 
 def parse_ini_file(ini_path):
-    """
-    Parses the Fallout76Prefs.ini file to extract specific display settings.
-    
-    Args:
-        ini_path (str): The full path to the Fallout76Prefs.ini file.
-
-    Returns:
-        dict: A dictionary containing the settings, or None if an error occurs.
-    """
+    """Parses the Fallout76Prefs.ini file to extract specific display settings."""
     config = configparser.ConfigParser()
-    # Read the INI file. If the file doesn't exist, it will return an empty list.
     if not os.path.exists(ini_path):
         print(f"Error: INI file not found at '{ini_path}'")
         messagebox.showerror("INI File Error", f"The specified INI file could not be found:\n{ini_path}")
@@ -48,67 +136,128 @@ def parse_ini_file(ini_path):
         return settings
     except (configparser.NoSectionError, configparser.NoOptionError) as e:
         print(f"Error parsing INI file: {e}")
-        messagebox.showerror("INI Parse Error", 
-                             f"Could not find a required setting in '{ini_path}'.\n\n"
-                             f"Please ensure the [Display] section and all required keys exist.\n\n"
-                             f"Details: {e}")
+        messagebox.showerror("INI Parse Error", f"Could not find a required setting in '{ini_path}'.\nDetails: {e}")
         return None
     except ValueError as e:
         print(f"Error converting INI value: {e}")
-        messagebox.showerror("INI Value Error",
-                             f"A setting in '{ini_path}' has an invalid value (e.g., not a number).\n\n"
-                             f"Details: {e}")
+        messagebox.showerror("INI Value Error", f"A setting in '{ini_path}' has an invalid value.\nDetails: {e}")
         return None
 
-def check_bot_status():
+def get_cached_data():
+    """Reads cache.txt and returns (refresh_token, fp1, fp2, fp3, ini_settings_list, fp1_secondary, use_secondary)."""
+    if not os.path.exists(CACHE_FILE):
+        return None, "", "", "", [], "", False
+    
+    try:
+        with open(CACHE_FILE, 'r', encoding='utf-8') as f:
+            lines = f.read().splitlines()
+        
+        # Pad lines if missing
+        while len(lines) < 12:
+            lines.append("")
+
+        r_token = lines[0].strip()
+        fp1 = lines[1].strip()
+        fp2 = lines[2].strip()
+        fp3 = lines[3].strip()
+        ini_settings = lines[4:10] # List of 6 strings
+        fp1_sec = lines[10].strip()
+        use_sec = lines[11].strip().lower() == 'true'
+        
+        return r_token, fp1, fp2, fp3, ini_settings, fp1_sec, use_sec
+    except Exception:
+        return None, "", "", "", [], "", False
+
+def save_cached_data(refresh_token, fp1, fp2, fp3, ini_settings, fp1_sec, use_sec):
+    """Saves data to cache.txt."""
+    try:
+        with open(CACHE_FILE, 'w', encoding='utf-8') as f:
+            f.write(f"{refresh_token or ''}\n")
+            f.write(f"{fp1 or ''}\n")
+            f.write(f"{fp2 or ''}\n")
+            f.write(f"{fp3 or ''}\n")
+            
+            # ini_settings should be a list of 6 values or a dict
+            if isinstance(ini_settings, dict):
+                f.write(f"{ini_settings.get('height', '')}\n")
+                f.write(f"{ini_settings.get('width', '')}\n")
+                f.write(f"{ini_settings.get('loc_x', '')}\n")
+                f.write(f"{ini_settings.get('loc_y', '')}\n")
+                f.write(f"{ini_settings.get('fullscreen', '')}\n")
+                f.write(f"{ini_settings.get('borderless', '')}\n")
+            elif isinstance(ini_settings, list):
+                for i in range(6):
+                    val = ini_settings[i] if i < len(ini_settings) else ""
+                    f.write(f"{val}\n")
+            else:
+                # Fallback empty
+                for _ in range(6): f.write("\n")
+            
+            f.write(f"{fp1_sec or ''}\n")
+            f.write(f"{'true' if use_sec else 'false'}")
+    except Exception as e:
+        print(f"Failed to save cache: {e}")
+
+def reset_ini():
     """
-    Periodically checks if the bot process is alive and updates the status label.
-    This ensures the UI reflects the bot's state even if it stops unexpectedly.
+    Reads display settings from cache.txt and writes them back to the INI file.
     """
-    global bot_process, status_label_main, root_tk_instance
+    try:
+        if not os.path.exists(CACHE_FILE):
+            print(f"Error: {CACHE_FILE} not found.")
+            return
 
-    # Stop checking if the main window has been destroyed
-    if not root_tk_instance or not root_tk_instance.winfo_exists():
-        return
+        with open(CACHE_FILE, 'r') as f:
+            lines = f.readlines()
 
-    # Check if the status label itself still exists
-    if not status_label_main or not status_label_main.winfo_exists():
-        root_tk_instance.after(2000, check_bot_status) # Keep trying in case it's redrawn
-        return
+        if len(lines) < 10:
+            print(f"Error: {CACHE_FILE} is missing required configuration data.")
+            return
 
-    is_running = bot_process and bot_process.is_alive()
-    current_status_text = status_label_main.cget("text")
+        ini_path = lines[3].strip()
 
-    if is_running:
-        # Bot is running, ensure the label reflects this.
-        pid = bot_process.pid
-        running_message = f"Status: Bot is running (PID: {pid})"
-        if current_status_text != running_message:
-            status_label_main.config(text=running_message)
-    else:
-        # Bot is not running. If the label incorrectly says it is, update it.
-        # This allows specific messages like "Terminated by F5" to persist,
-        # but corrects the status if the bot crashes while the label showed "running".
-        if "running" in current_status_text.lower():
-            status_label_main.config(text="Status: Bot is not running.")
+        if not os.path.exists(ini_path):
+            print(f"Error: INI file not found at {ini_path}")
+            return
 
-    # Schedule this function to run again after 2 seconds
-    root_tk_instance.after(2000, check_bot_status)
+        config = configparser.ConfigParser()
+        config.read(ini_path)
 
+        if not config.has_section('Display'):
+            config.add_section('Display')
+
+        config.set('Display', 'iSize H', lines[4].strip())
+        config.set('Display', 'iSize W', lines[5].strip())
+        config.set('Display', 'iLocation X', lines[6].strip())
+        config.set('Display', 'iLocation Y', lines[7].strip())
+        config.set('Display', 'bFull Screen', lines[8].strip())
+        config.set('Display', 'bBorderless', lines[9].strip())
+
+        with open(ini_path, 'w') as configfile:
+            config.write(configfile)
+        print(f"Settings in [Display] section of {ini_path} have been updated from {CACHE_FILE}")
+
+    except Exception as e:
+        print(f"An unexpected error occurred during INI reset: {e}")
+
+def cleanup():
+    """Cleans up resources on application exit."""
+    reset_ini()
+    terminate_bot_process()
+    stop_global_f5_listener()
+
+# --- ToolTip Class ---
 class CreateToolTip(object):
-    """
-    Create a tooltip for a given widget.
-    """
     def __init__(self, widget, text='widget info'):
-        self.waittime = 500     # Milliseconds after hover to show tooltip
-        self.wraplength = 180   # Max width in pixels before wrapping text
+        self.waittime = 500     
+        self.wraplength = 180   
         self.widget = widget
         self.text = text
-        self.widget.bind("<Enter>", self.enter) # Bind mouse entering widget
-        self.widget.bind("<Leave>", self.leave) # Bind mouse leaving widget
-        self.widget.bind("<ButtonPress>", self.leave) # Hide tooltip on click
+        self.widget.bind("<Enter>", self.enter) 
+        self.widget.bind("<Leave>", self.leave) 
+        self.widget.bind("<ButtonPress>", self.leave) 
         self.id = None
-        self.tw = None # Tooltip window
+        self.tw = None 
 
     def enter(self, event=None):
         self.schedule()
@@ -146,256 +295,286 @@ class CreateToolTip(object):
         if tw:
             tw.destroy()
 
-def call_url(
-    url: str,
-    method: str = "GET",
-    params: dict = None,
-    data: dict = None,
-    json_payload: dict = None,
-    headers: dict = None,
-    timeout: int = 10,
-    allow_redirects: bool = True
-    ) -> dict:
-    result = {
-        "success": False,
-        "status_code": None,
-        "content_type": None,
-        "data": None,
-        "headers": None,
-        "error_message": None,
-        "raw_response": None,
-    }
-    try:
-        request_headers = headers if headers else {}
-        if json_payload and 'Content-Type' not in request_headers:
-            request_headers['Content-Type'] = 'application/json'
-        response = requests.request(
-            method=method.upper(),
-            url=url,
-            params=params,
-            data=data if not json_payload else None,
-            json=json_payload,
-            headers=request_headers,
-            timeout=timeout,
-            allow_redirects=allow_redirects
-        )
-        result["raw_response"] = response
-        result["status_code"] = response.status_code
-        result["headers"] = dict(response.headers)
-        result["content_type"] = response.headers.get("Content-Type", "").lower()
-        response.raise_for_status()
-        if not response.content:
-            result["data"] = None
-            result["success"] = True
-        elif "application/json" in result["content_type"]:
-            try:
-                result["data"] = response.json()
-                result["success"] = True
-            except json.JSONDecodeError as e:
-                result["error_message"] = f"Failed to decode JSON: {e}. Raw text: {response.text[:200]}..."
-                result["data"] = response.text
-        elif "text/" in result["content_type"]:
-            result["data"] = response.text
-            result["success"] = True
-        else:
-            result["data"] = response.content
-            result["success"] = True
-    except requests.exceptions.HTTPError as e:
-        result["error_message"] = f"HTTP Error: {e}"
-        if e.response is not None:
-            result["data"] = e.response.text
-    except requests.exceptions.ConnectionError as e:
-        result["error_message"] = f"Connection Error: {e}"
-    except requests.exceptions.Timeout as e:
-        result["error_message"] = f"Timeout Error: {e}"
-    except requests.exceptions.RequestException as e:
-        result["error_message"] = f"Request Exception: {e}"
-    except Exception as e:
-        result["error_message"] = f"An unexpected error occurred: {e}"
-    return result
+# --- App Lifecycle ---
 
-def write_file(filepath, content, mode='w', encoding='utf-8'):
-    if mode not in ['w', 'a']:
-        print(f"Error: Invalid mode '{mode}'. Use 'w' (write) or 'a' (append).")
-        return False
-    try:
-        with open(filepath, mode, encoding=encoding) as file:
-            file.write(content)
-        return True
-    except IOError as e:
-        print(f"Error writing to file '{filepath}': {e}")
-        return False
-    except Exception as e:
-        print(f"An unexpected error occurred while writing to '{filepath}': {e}")
-        return False
-
-def read_file(filepath, encoding='utf-8'):
-    try:
-        with open(filepath, 'r', encoding=encoding) as file:
-            content = file.read()
-        return content.splitlines() # Returns a list of lines
-    except FileNotFoundError:
-        print(f"Error: File '{filepath}' not found.")
-        return None
-    except IOError as e:
-        print(f"Error reading file '{filepath}': {e}")
-        return None
-    except Exception as e:
-        print(f"An unexpected error occurred while reading '{filepath}': {e}")
-        return None
-
-def terminate_bot_process(graceful_timeout=1, kill_timeout=1):
-    """Attempts to terminate and then kill the bot process."""
+def terminate_bot_process():
     global bot_process
-    terminated = False
     if bot_process and bot_process.is_alive():
-        pid = bot_process.pid
-        print(f"Attempting to terminate bot process (PID: {pid})...")
         bot_process.terminate()
-        bot_process.join(timeout=graceful_timeout)
-        if not bot_process.is_alive():
-            print(f"Bot process (PID: {pid}) terminated gracefully.")
-            terminated = True
-        else:
-            print(f"Bot process (PID: {pid}) did not terminate gracefully. Killing...")
+        bot_process.join(timeout=1)
+        if bot_process.is_alive():
             bot_process.kill()
-            bot_process.join(timeout=kill_timeout)
-            if not bot_process.is_alive():
-                print(f"Bot process (PID: {pid}) killed.")
-                terminated = True
-            else:
-                print(f"Failed to kill bot process (PID: {pid}). It might be stuck.")
-        if terminated:
-            bot_process = None # Clear the reference
-    return terminated
+        bot_process = None
+        return True
+    return False
 
 def on_app_closing():
-    """Handles application close events (window X or Exit button)."""
-    global root_tk_instance
-    print("Application closing...")
-    stop_global_f5_listener() # Stop the global listener
+    global root_tk_instance, auth_server
+    print("Closing app...")
+    stop_global_f5_listener()
     terminate_bot_process()
+    if auth_server:
+        auth_server.shutdown()
+        auth_server.server_close()
     if root_tk_instance:
         root_tk_instance.destroy()
 
-def _kill_bot_on_f5_action(): # Renamed to avoid conflict if event is passed
-    """
-    Internal logic for killing the bot and updating UI.
-    This should be called from the main Tkinter thread.
-    """
-    global status_label_main, bot_process, root_tk_instance
-    print("F5 action triggered to kill bot.")
+def check_bot_status():
+    global bot_process, status_label_main, root_tk_instance
+    if not root_tk_instance or not root_tk_instance.winfo_exists(): return
+    if not status_label_main or not status_label_main.winfo_exists():
+        root_tk_instance.after(2000, check_bot_status)
+        return
 
-    message_to_display = ""
-    console_message_on_success = ""
+    is_running = bot_process and bot_process.is_alive()
+    current_status_text = status_label_main.cget("text")
 
-    if bot_process and bot_process.is_alive():
-        pid = bot_process.pid # Store before termination attempt
-        if terminate_bot_process():
-            message_to_display = f"Status: Bot process (PID: {pid}) terminated by F5."
-            console_message_on_success = message_to_display # Also print this if UI fails
-        else:
-            message_to_display = f"Status: Failed to terminate bot (PID: {pid}) on F5."
+    if is_running:
+        pid = bot_process.pid
+        running_message = f"Status: Bot is running (PID: {pid})"
+        if current_status_text != running_message:
+            status_label_main.config(text=running_message)
     else:
-        message_to_display = "Status: No bot process running to terminate."
-        print("No bot process running to terminate via F5.") # Console print for this case
+        if "running" in current_status_text.lower():
+            status_label_main.config(text="Status: Bot is not running.")
 
-    if root_tk_instance and status_label_main:
-        try:
-            # Check if the widget still exists and its master (the root window)
-            if status_label_main.winfo_exists() and root_tk_instance.winfo_exists():
-                 status_label_main.config(text=message_to_display)
-            elif console_message_on_success: # If UI is gone but an action was taken
-                print(console_message_on_success)
-        except tk.TclError:
-            # Widget might have been destroyed
-            print(f"Error updating status label (it might be destroyed): {message_to_display}")
-            if console_message_on_success:
-                print(console_message_on_success)
-    elif console_message_on_success: # If UI elements are not available but an action was taken
-        print(console_message_on_success)
+    root_tk_instance.after(2000, check_bot_status)
 
+# --- Global Hotkey Logic ---
+def _kill_bot_on_f5_action():
+    global status_label_main, bot_process
+    msg = ""
+    if bot_process and bot_process.is_alive():
+        terminate_bot_process()
+        msg = "Status: Bot process terminated by F5."
+    else:
+        msg = "Status: No bot running to stop."
+    
+    if status_label_main:
+        status_label_main.config(text=msg)
 
 def on_global_f5_press():
-    """
-    Callback for the pynput listener.
-    Schedules the actual bot killing logic to run in the main Tkinter thread.
-    """
     global root_tk_instance
     if root_tk_instance:
-        print("Global F5 detected, scheduling bot kill action.")
-        # Use after_idle to ensure it runs when Tkinter is ready and in the main thread
         root_tk_instance.after_idle(_kill_bot_on_f5_action)
-    else:
-        # Fallback if Tkinter isn't fully up or is shutting down - attempt direct action
-        # This is less safe for UI but terminate_bot_process itself is process-level
-        print("Global F5 detected, root_tk_instance not available. Attempting direct bot termination.")
-        _kill_bot_on_f5_action()
-
 
 def start_global_f5_listener():
     global keyboard_listener
-    
+    if not pynput_keyboard: return
+
     def on_press(key):
         try:
             if key == pynput_keyboard.Key.f5:
                 on_global_f5_press()
-        except Exception as e:
-            # Can log e if needed, but pynput might call this rapidly for other keys
-            pass
+        except: pass
 
-    if keyboard_listener is None: # Start only if not already running
-        # Listener runs in its own daemon thread.
+    if keyboard_listener is None:
         keyboard_listener = pynput_keyboard.Listener(on_press=on_press)
         keyboard_listener.start()
-        print("Global F5 listener started.")
-    else:
-        print("Global F5 listener already running.")
-
 
 def stop_global_f5_listener():
     global keyboard_listener
     if keyboard_listener:
-        print("Stopping global F5 listener...")
         keyboard_listener.stop()
-        # listener.join() # Optional: wait for listener thread to fully stop.
-                        # Can block if listener is stuck. For quick exit, often omitted.
         keyboard_listener = None
-        print("Global F5 listener stopped.")
 
+# --- Patreon Logic ---
 
-def check_user():
-    global password_entry, status_label # These are from setup_login_window
-    entered_password = str(password_entry.get())
-    if not entered_password: # Basic validation
-        status_label.config(text="User ID cannot be empty!", fg="red")
+class OAuthHandler(http.server.BaseHTTPRequestHandler):
+    def do_GET(self):
+        global auth_code
+        parsed_path = urllib.parse.urlparse(self.path)
+        query = urllib.parse.parse_qs(parsed_path.query)
+        
+        if 'code' in query:
+            auth_code = query['code'][0]
+            self.send_response(200)
+            self.send_header('Content-type', 'text/html')
+            self.end_headers()
+            self.wfile.write(b"<html><body><h1>Login Successful!</h1><script>window.close();</script></body></html>")
+            threading.Thread(target=self.server.shutdown).start()
+        else:
+            self.send_response(400)
+            self.wfile.write(b"Error: No code received.")
+
+def validate_patreon_membership(access_token):
+    """Checks if user is an active patron of the campaign."""
+    url = "https://www.patreon.com/api/oauth2/v2/identity"
+    params = {
+        "include": "memberships.campaign", 
+        "fields[member]": "patron_status,lifetime_support_cents"
+    }
+    headers = {"Authorization": f"Bearer {access_token}"}
+    
+    result = call_url(url, params=params, headers=headers)
+    
+    if not result['success']:
+        return False, f"API Error: {result.get('error_message')}"
+    
+    data = result['data']
+    included = data.get('included', [])
+    
+    for item in included:
+        if item.get('type') == 'member':
+            relationships = item.get('relationships', {})
+            campaign_data = relationships.get('campaign', {}).get('data', {})
+            
+            if campaign_data.get('id') == PATREON_CAMPAIGN_ID:
+                status = item.get('attributes', {}).get('patron_status')
+                if status == 'active_patron':
+                    return True, "Active"
+                else:
+                    return False, f"Status is '{status}'"
+
+    return False, "Not a member of this campaign."
+
+def refresh_patreon_token(old_refresh_token):
+    """Uses the refresh token to get a NEW access token."""
+    token_url = "https://www.patreon.com/api/oauth2/token"
+    payload = {
+        "grant_type": "refresh_token",
+        "refresh_token": old_refresh_token,
+        "client_id": PATREON_CLIENT_ID,
+        "client_secret": PATREON_CLIENT_SECRET
+    }
+    
+    result = call_url(token_url, method="POST", data=payload)
+    
+    if result['success']:
+        new_access = result['data'].get('access_token')
+        new_refresh = result['data'].get('refresh_token')
+        return True, new_access, new_refresh
+    else:
+        return False, None, result.get('error_message')
+
+def start_patreon_login_flow(window):
+    global auth_server, auth_code
+    
+    if status_label_login:
+        status_label_login.config(text="Waiting for browser login...", fg="blue")
+    window.update()
+
+    auth_url = (
+        f"https://www.patreon.com/oauth2/authorize"
+        f"?response_type=code"
+        f"&client_id={PATREON_CLIENT_ID}"
+        f"&redirect_uri={urllib.parse.quote(REDIRECT_URI)}"
+        f"&scope=identity%20identity.memberships"
+    )
+
+    auth_code = None
+    try:
+        auth_server = socketserver.TCPServer(("", PORT), OAuthHandler)
+    except OSError:
+        if status_label_login:
+            status_label_login.config(text=f"Port {PORT} occupied.", fg="red")
         return
 
-    url = f"https://rust-bot-auth-744976866854.us-central1.run.app/check_patron/{entered_password}"
-    result = call_url(url, method="GET")
+    server_thread = threading.Thread(target=auth_server.serve_forever)
+    server_thread.daemon = True
+    server_thread.start()
 
-    if result['success'] and result['data'] and result['data'].get('is_patron'):
-        clear_window()
-        cache_content = read_file('cache.txt')
-        # Preserve existing filepaths if they exist in cache
-        existing_fp1 = "None"
-        existing_fp2 = "None"
-        if cache_content:
-            if len(cache_content) > 1 and cache_content[1]:
-                existing_fp1 = cache_content[1]
-            if len(cache_content) > 2 and cache_content[2]:
-                existing_fp2 = cache_content[2]
+    webbrowser.open(auth_url)
+
+    def check_for_code():
+        global auth_code, auth_server
+        if auth_code:
+            auth_server.server_close()
+            auth_server = None
+            if status_label_login:
+                status_label_login.config(text="Verifying token...", fg="orange")
+            exchange_code_for_token(auth_code, window)
+        elif server_thread.is_alive():
+            window.after(1000, check_for_code)
+        else:
+            if status_label_login:
+                status_label_login.config(text="Login timed out.", fg="red")
+            if auth_server: 
+                auth_server.server_close()
+                auth_server = None
+
+    window.after(1000, check_for_code)
+
+def exchange_code_for_token(code, window):
+    token_url = "https://www.patreon.com/api/oauth2/token"
+    payload = {
+        "code": code,
+        "grant_type": "authorization_code",
+        "client_id": PATREON_CLIENT_ID,
+        "client_secret": PATREON_CLIENT_SECRET,
+        "redirect_uri": REDIRECT_URI
+    }
+    
+    result = call_url(token_url, method="POST", data=payload)
+    
+    if not result['success']:
+        if status_label_login:
+            status_label_login.config(text=f"Login Failed: {result.get('error_message')}", fg="red")
+        return
+
+    access_token = result['data'].get('access_token')
+    refresh_token = result['data'].get('refresh_token')
+
+    is_valid, msg = validate_patreon_membership(access_token)
+    
+    if is_valid:
+        # Save credentials - preserve existing paths if possible, but we are in login flow so maybe we just read what we can
+        _, fp1, fp2, fp3, ini_settings, fp1_sec, use_sec = get_cached_data()
+        save_cached_data(refresh_token, fp1, fp2, fp3, ini_settings, fp1_sec, use_sec)
         
-        write_file("cache.txt", f"{entered_password}\n{existing_fp1}\n{existing_fp2}", mode='w')
-        setup_main_app_window(root_tk_instance) # root_tk_instance is global
+        clear_window()
+        setup_main_app_window(window)
     else:
-        error_msg = "Incorrect User ID!"
-        if result['error_message']:
-            error_msg = f"Error: {result['error_message']}"
-        elif not result['success']:
-             error_msg = "Failed to verify User ID. Check connection."
-        status_label.config(text=error_msg, fg="red")
-        password_entry.delete(0, tk.END)
+        if status_label_login:
+            status_label_login.config(text=f"Access Denied: {msg}", fg="red")
+
+# --- Auto Login Logic ---
+
+def attempt_auto_login(window):
+    """Runs in a background thread to check cache validity."""
+    cached_refresh, fp1, fp2, fp3, ini_settings, fp1_sec, use_sec = get_cached_data()
+    
+    if not cached_refresh or len(cached_refresh) < 5:
+        # No valid token, stop here and wait for user input
+        return
+
+    # We have a token, update UI to show we are working
+    def update_ui_checking():
+        if status_label_login:
+            status_label_login.config(text="Verifying saved session...", fg="blue")
+    window.after(0, update_ui_checking)
+
+    # Try to refresh the token
+    success, new_access, new_refresh = refresh_patreon_token(cached_refresh)
+
+    if success:
+        # Token refreshed, now check membership
+        is_member, msg = validate_patreon_membership(new_access)
+        
+        if is_member:
+            # Success! Save new refresh token
+            save_cached_data(new_refresh, fp1, fp2, fp3, ini_settings, fp1_sec, use_sec)
+            
+            # Switch to main window
+            def switch_to_main():
+                clear_window()
+                setup_main_app_window(window)
+            window.after(0, switch_to_main)
+            return
+        else:
+            # Token valid, but membership expired
+            def show_error():
+                if status_label_login:
+                    status_label_login.config(text=f"Session Expired: {msg}", fg="red")
+            window.after(0, show_error)
+    else:
+        # Refresh failed (token revoked or expired completely)
+        def show_fail():
+            if status_label_login:
+                status_label_login.config(text="Session expired. Please log in again.", fg="orange")
+        window.after(0, show_fail)
+
+# --- UI Setup ---
 
 def clear_window():
     global root_tk_instance
@@ -404,140 +583,99 @@ def clear_window():
             widget.destroy()
 
 def setup_login_window(window):
-    global password_entry, status_label, root_tk_instance
-    root_tk_instance = window # Store the root window instance
-
-    try:
-        cache = read_file("cache.txt")
-        patron_id = None
-        if cache and len(cache) > 0:
-            patron_id = cache[0].strip() if cache[0] else None
-
-        if patron_id:
-            url = f"https://rust-bot-auth-744976866854.us-central1.run.app/check_patron/{patron_id}"
-            result = call_url(url, method="GET")
-            if result['success'] and result['data'] and result['data'].get('is_patron'):
-                clear_window()
-                setup_main_app_window(window)
-                return
-    except FileNotFoundError:
-        print("cache.txt not found. Proceeding to login screen.")
-    except Exception as e:
-        print(f"Error during auto-login attempt: {e}. Proceeding to login screen.")
+    global status_label_login, root_tk_instance
+    root_tk_instance = window
 
     window.title("Fallout Bot Login")
-    window.geometry("300x180")
+    window.geometry("350x220")
 
-    prompt_label = tk.Label(window, text="Please enter your identification code:")
-    prompt_label.pack(pady=10)
+    tk.Label(window, text="Authentication Required", font=("Arial", 12, "bold")).pack(pady=(20, 10))
+    tk.Label(window, text="You must be an active Patron to use this bot.", font=("Arial", 9)).pack(pady=5)
 
-    password_entry = tk.Entry(window, show="*", width=25)
-    password_entry.pack(pady=5)
-    password_entry.focus_set()
+    login_btn = tk.Button(window, text="Login with Patreon", bg="#f96854", fg="white", 
+                          font=("Arial", 10, "bold"), height=2, width=20,
+                          command=lambda: start_patreon_login_flow(window))
+    login_btn.pack(pady=20)
 
-    login_button = tk.Button(window, text="Login", command=check_user, width=10)
-    login_button.pack(pady=10)
-
-    status_label = tk.Label(window, text="", fg="red")
-    status_label.pack(pady=5)
-
-    window.bind('<Return>', lambda event=None: login_button.invoke())
+    status_label_login = tk.Label(window, text="", fg="red", wraplength=300)
+    status_label_login.pack(pady=5)
+    
+    # Trigger auto-login check in background
+    threading.Thread(target=attempt_auto_login, args=(window,), daemon=True).start()
 
 def setup_main_app_window(root_window):
     global status_label_main, bot_process, root_tk_instance
-    root_tk_instance = root_window # Ensure global ref is up-to-date
+    root_tk_instance = root_window
 
     root_window.title("Fallout Bot Control Panel")
-    root_window.geometry("550x270") # Slightly increased height for status bar if needed
+    root_window.geometry("550x450") # Increased height for extra fields
 
     # --- Status Bar ---
     status_bar = tk.Frame(root_window, relief=tk.SUNKEN, bd=1)
     status_bar.pack(side=tk.BOTTOM, fill=tk.X, pady=(5,0))
-
-    # Exit Button (packed first from the right)
+    
     exit_button = tk.Button(status_bar, text="Exit", command=on_app_closing)
     exit_button.pack(side=tk.RIGHT, padx=5, pady=2)
 
-    
-
-    # Main Status Label (packed from the left, fills remaining space)
-    status_label_main = tk.Label(status_bar, text="Status: Ready", anchor='w') # Assign to global
+    status_label_main = tk.Label(status_bar, text="Status: Ready", anchor='w')
     status_label_main.pack(side=tk.LEFT, fill=tk.X, expand=True, padx=5)
 
-
-    # --- Load cache for filepaths and patron ID ---
-    cache = read_file("cache.txt")
-    patron_id_from_cache = "UNKNOWN_PATRON" # Default
-    if cache and len(cache) > 0 and cache[0] and cache[0].strip():
-        patron_id_from_cache = cache[0].strip()
-    else:
-        messagebox.showwarning("Cache Error", "Patron ID not found in cache. This might cause issues if cache is re-written.")
-
-    default_fp1 = "C:\\Program Files\\Fallout76\\Fallout76.exe"
-    default_fp2 = "C:\\Program Files\\Tesseract-OCR\\tesseract.exe"
-    user_docs = os.path.expanduser("~\\Documents") # Finds user's Documents folder
-    default_fp3 = os.path.join(user_docs, "My Games", "Fallout 76", "Fallout76Prefs.ini")
-
-    fp1_value = default_fp1
-    if cache and len(cache) > 1 and cache[1] and cache[1].strip() != "None":
-        fp1_value = cache[1].strip()
-
-    fp2_value = default_fp2
-    if cache and len(cache) > 2 and cache[2] and cache[2].strip() != "None":
-        fp2_value = cache[2].strip()
-
-    fp3_value = default_fp3
-    if cache and len(cache) > 3 and cache[3] and cache[3].strip() != "None":
-        fp3_value = cache[3].strip()
+    # --- Load cache for FilePaths ---
+    current_refresh_token, cached_fp1, cached_fp2, cached_fp3, cached_ini, cached_fp1_sec, cached_use_sec = get_cached_data()
     
-    cache_ini_vals = []
-    for i in range(4, 9):
-        if cache and len(cache) > i and cache[i] and cache[i].strip() != "None":
-            cache_ini_vals.append(cache[i].strip())
-    
-    filepath1_var = tk.StringVar(value=fp1_value)
-    filepath2_var = tk.StringVar(value=fp2_value)
-    filepath3_var = tk.StringVar(value=fp3_value)
-    cache_ini_vals_var = tk.StringVar(value=", ".join(cache_ini_vals))
+    # Defaults
+    fp1_val = cached_fp1 if cached_fp1 else "C:\\Program Files\\Fallout76\\Fallout76.exe"
+    fp2_val = cached_fp2 if cached_fp2 else "C:\\Program Files\\Tesseract-OCR\\tesseract.exe"
+    user_docs = os.path.expanduser("~\\Documents")
+    fp3_val = cached_fp3 if cached_fp3 else os.path.join(user_docs, "My Games", "Fallout 76", "Fallout76Prefs.ini")
+    fp1_sec_val = cached_fp1_sec if cached_fp1_sec else ""
 
+    filepath1_var = tk.StringVar(value=fp1_val)
+    filepath2_var = tk.StringVar(value=fp2_val)
+    filepath3_var = tk.StringVar(value=fp3_val)
+    filepath1_sec_var = tk.StringVar(value=fp1_sec_val)
+    use_secondary_var = tk.BooleanVar(value=cached_use_sec)
+    show_secondary_var = tk.BooleanVar(value=False) 
 
-    # --- Action Functions ---
     def start_bot_action():
         global bot_process
         fp1 = filepath1_var.get()
         fp2 = filepath2_var.get()
         fp3 = filepath3_var.get()
-        cache_ini_vals = cache_ini_vals_var.get().split(", ")
-        
-        
-        if not all([fp1, fp2, fp3]) or "None" in [fp1, fp2, fp3]:
-            messagebox.showwarning("Input Missing", "Please provide all three filepaths.")
-            if status_label_main: status_label_main.config(text="Status: Error - Missing filepaths")
-            return
+        fp1_sec = filepath1_sec_var.get()
+        use_sec = use_secondary_var.get()
 
+        # Determine which game path to use
+        game_path_to_use = fp1
+        if use_sec and show_secondary_var.get(): 
+             game_path_to_use = fp1_sec
+
+        if not game_path_to_use or not fp2 or not fp3:
+            messagebox.showwarning("Missing Info", "Please provide all required filepaths.")
+            return
+            
         ini_settings = parse_ini_file(fp3)
         if ini_settings is None:
-            # The parse_ini_file function already showed an error message.
             if status_label_main: status_label_main.config(text="Status: Error - Failed to read INI file.")
-            return # Stop execution if parsing failed
+            return
+
+        if status_label_main: status_label_main.config(text=f"Status: Starting...")
         
-        if status_label_main: status_label_main.config(text=f"Status: Starting bot...")
-        print(f"Starting bot with Filepath 1: {fp1}")
-        print(f"Starting bot with Filepath 2: {fp2}")
-        print(f"Starting bot with INI Filepath: {fp3}")
-            
         if bot_process and bot_process.is_alive():
-            print("Terminating existing bot process before starting a new one...")
             terminate_bot_process()
-            if status_label_main: status_label_main.config(text="Status: Terminated old bot, starting new.")
-        if ini_settings['height'] != str(800) and ini_settings['width'] != str(1280) and ini_settings['loc_x'] != str(0) and ini_settings['loc_y'] != str(0) and ini_settings['fullscreen'] != "0" and ini_settings['borderless'] != "1":
-            write_file("cache.txt", f"{patron_id_from_cache}\n{fp1}\n{fp2}\n{fp3}\n{ini_settings['height']}\n{ini_settings['width']}\n{ini_settings['loc_x']}\n{ini_settings['loc_y']}\n{ini_settings['fullscreen']}\n{ini_settings['borderless']}\n", mode='w')
+
+        # Update cache 
+        curr_token, _, _, _, _, _, _ = get_cached_data()
+        save_cached_data(curr_token, fp1, fp2, fp3, ini_settings, fp1_sec, use_sec)
+
         try:
+            # Pass the selected game path as fp1 (the game executable)
+            # main(fp2, fp1, fp3, h, w, x, y, fs, bl)
             bot_process = multiprocessing.Process(
                 target=main, 
                 args=(
                     fp2, 
-                    fp1,
+                    game_path_to_use, # Use the selected path
                     fp3, 
                     ini_settings['height'],
                     ini_settings['width'],
@@ -548,152 +686,87 @@ def setup_main_app_window(root_window):
                 )
             )
             bot_process.start()
-            print(f"Bot process started with PID: {bot_process.pid}.")
-            if status_label_main: status_label_main.config(text=f"Status: Bot process initiated (PID: {bot_process.pid})")
+            if status_label_main: status_label_main.config(text=f"Status: Bot running (PID: {bot_process.pid}) using {os.path.basename(game_path_to_use)}")
         except Exception as e:
-            messagebox.showerror("Error", f"Failed to run main process: {e}")
-            if status_label_main: status_label_main.config(text=f"Status: Error starting process - {e}")
-            bot_process = None
+            status_label_main.config(text=f"Status: Error {e}")
 
-    def browse_file_action(entry_var, title="Select File", executable_only=True):
-        if executable_only: filetypes=(("Executable files", "*.exe"), ("All files", "*.*"), ("Text files", "*.txt"))
-        else: filetypes=(("All files", "*.*"), ("Text files", "*.txt"))
-        filename = filedialog.askopenfilename(
-            title=title,
-            filetypes=filetypes
-        )
-        if filename:
-            entry_var.set(filename)
-            if status_label_main: status_label_main.config(text=f"Status: File selected - {filename.split('/')[-1]}")
+    def browse(var, filetypes=(("Exe", "*.exe"),("All", "*.*"))):
+        f = filedialog.askopenfilename(filetypes=filetypes)
+        if f: var.set(f)
 
-    # --- Main Content Frame ---
-    content_frame = tk.Frame(root_window, padx=10, pady=10)
-    content_frame.pack(fill=tk.BOTH, expand=True)
+    # --- Layout ---
+    content = tk.Frame(root_window, padx=10, pady=10)
+    content.pack(fill=tk.BOTH, expand=True)
 
-    # --- Controls Section (Start Button Only) ---
-    controls_frame = tk.Frame(content_frame)
-    controls_frame.pack(pady=(0, 15), fill=tk.X)
-
-    start_button = tk.Button(controls_frame, text="Start Bot", command=start_bot_action, width=12, height=2)
-    start_button.pack(side=tk.LEFT, padx=(0,10))
-    CreateToolTip(start_button, "Start the bot process using the specified filepaths.")
-
-    # F5 instruction label (packed next, from the right, so it's to the left of Exit)
-    f5_info_label = tk.Label(controls_frame, text="F5 to Stop Bot", fg="red") # fg makes it less prominent
-    f5_info_label.pack(side=tk.LEFT, padx=(0,10)) # padx to space it from Exit button
+    btns = tk.Frame(content)
+    btns.pack(pady=(0, 15), fill=tk.X)
     
-    # --- Filepath Input Sections ---
-    filepaths_group = tk.LabelFrame(content_frame, text="Configuration Filepaths", padx=10, pady=10)
-    filepaths_group.pack(fill=tk.X, expand=True)
-
-    # Filepath 1
-    fp1_frame = tk.Frame(filepaths_group)
-    fp1_frame.pack(fill=tk.X, pady=5)
-    tk.Label(fp1_frame, text="Fallout76.exe:", width=12, anchor='w').pack(side=tk.LEFT, padx=(0,5))
-    entry1 = tk.Entry(fp1_frame, textvariable=filepath1_var)
-    entry1.pack(side=tk.LEFT, expand=True, fill=tk.X, padx=(0, 5))
-    CreateToolTip(entry1, "Enter the path for Fallout76.exe.")
-    browse1_button = tk.Button(fp1_frame, text="Browse...", command=lambda: browse_file_action(filepath1_var, "Select Filepath To Fallout76.exe"))
-    browse1_button.pack(side=tk.LEFT)
-
-    # Filepath 2
-    fp2_frame = tk.Frame(filepaths_group)
-    fp2_frame.pack(fill=tk.X, pady=5)
-    tk.Label(fp2_frame, text="tesseract.exe:", width=12, anchor='w').pack(side=tk.LEFT, padx=(0,5))
-    entry2 = tk.Entry(fp2_frame, textvariable=filepath2_var)
-    entry2.pack(side=tk.LEFT, expand=True, fill=tk.X, padx=(0, 5))
-    CreateToolTip(entry2, "Enter the path for tesseract.exe.")
-    browse2_button = tk.Button(fp2_frame, text="Browse...", command=lambda: browse_file_action(filepath2_var, "Select Filepath To tesseract.exe"))
-    browse2_button.pack(side=tk.LEFT)
+    b_start = tk.Button(btns, text="Start Bot", command=start_bot_action, width=15, height=2, bg="#DDDDDD")
+    b_start.pack(side=tk.LEFT, padx=(0,10))
+    CreateToolTip(b_start, "Run the bot.")
     
-    # Filepath 3
-    fp3_frame = tk.Frame(filepaths_group)
-    fp3_frame.pack(fill=tk.X, pady=5)
-    tk.Label(fp3_frame, text="Fallout76Prefs.ini:", width=12, anchor='w').pack(side=tk.LEFT, padx=(0,5))
-    entry2 = tk.Entry(fp3_frame, textvariable=filepath3_var)
-    entry2.pack(side=tk.LEFT, expand=True, fill=tk.X, padx=(0, 5))
-    CreateToolTip(entry2, "Enter the path for Fallout76Prefs.ini file.")
-    browse2_button = tk.Button(fp3_frame, text="Browse...", command=lambda: browse_file_action(filepath3_var, "Select Filepath To Fallout76Prefs.ini", executable_only=False))
-    browse2_button.pack(side=tk.LEFT)
+    tk.Label(btns, text="Press F5 to Stop", fg="red").pack(side=tk.LEFT)
+
+    group = tk.LabelFrame(content, text="Configuration", padx=10, pady=10)
+    group.pack(fill=tk.X, expand=True)
+
+    # Primary Fallout 76 Path
+    row1 = tk.Frame(group)
+    row1.pack(fill=tk.X, pady=5)
+    tk.Label(row1, text="Fallout76.exe:", width=15, anchor='w').pack(side=tk.LEFT)
+    tk.Entry(row1, textvariable=filepath1_var).pack(side=tk.LEFT, expand=True, fill=tk.X, padx=5)
+    tk.Button(row1, text="...", command=lambda: browse(filepath1_var)).pack(side=tk.LEFT)
+
+    # Secondary Path Container (Hidden by default)
+    secondary_frame = tk.Frame(group)
     
+    def toggle_secondary_view():
+        if show_secondary_var.get():
+            secondary_frame.pack(fill=tk.X, pady=5, after=row_toggle)
+        else:
+            secondary_frame.pack_forget()
+
+    # Toggle Button for Secondary
+    row_toggle = tk.Frame(group)
+    row_toggle.pack(fill=tk.X, pady=2)
+    toggle_btn = tk.Checkbutton(row_toggle, text="Configure Alternate Version", variable=show_secondary_var, command=toggle_secondary_view)
+    toggle_btn.pack(side=tk.LEFT)
+    CreateToolTip(toggle_btn, "Enable this to configure a second Fallout 76 executable (e.g., for running Steam and Game Pass versions).")
+
+    # Secondary Fields inside the frame
+    row_sec_path = tk.Frame(secondary_frame)
+    row_sec_path.pack(fill=tk.X, pady=2)
+    tk.Label(row_sec_path, text="Alt Fallout76.exe:", width=15, anchor='w').pack(side=tk.LEFT)
+    tk.Entry(row_sec_path, textvariable=filepath1_sec_var).pack(side=tk.LEFT, expand=True, fill=tk.X, padx=5)
+    tk.Button(row_sec_path, text="...", command=lambda: browse(filepath1_sec_var)).pack(side=tk.LEFT)
+
+    row_sec_use = tk.Frame(secondary_frame)
+    row_sec_use.pack(fill=tk.X, pady=2)
+    tk.Label(row_sec_use, width=15).pack(side=tk.LEFT) 
+    use_chk = tk.Checkbutton(row_sec_use, text="Use this version instead of primary", variable=use_secondary_var)
+    use_chk.pack(side=tk.LEFT)
+
+    # Tesseract Path
+    row2 = tk.Frame(group)
+    row2.pack(fill=tk.X, pady=5)
+    tk.Label(row2, text="tesseract.exe:", width=15, anchor='w').pack(side=tk.LEFT)
+    tk.Entry(row2, textvariable=filepath2_var).pack(side=tk.LEFT, expand=True, fill=tk.X, padx=5)
+    tk.Button(row2, text="...", command=lambda: browse(filepath2_var)).pack(side=tk.LEFT)
+
+    # INI Path
+    row3 = tk.Frame(group)
+    row3.pack(fill=tk.X, pady=5)
+    tk.Label(row3, text="Fallout76Prefs.ini:", width=15, anchor='w').pack(side=tk.LEFT)
+    tk.Entry(row3, textvariable=filepath3_var).pack(side=tk.LEFT, expand=True, fill=tk.X, padx=5)
+    tk.Button(row3, text="...", command=lambda: browse(filepath3_var, filetypes=(("INI", "*.ini"),("All", "*.*")))).pack(side=tk.LEFT)
+
     start_global_f5_listener()
-    
-    root_window.protocol("WM_DELETE_WINDOW", on_app_closing)
-    
     root_window.after(2000, check_bot_status)
 
-def reset_ini():
-    """
-    Reads display settings from cache.txt and writes them back to the INI file,
-    preserving other settings.
-    """
-    cache_filepath = "cache.txt"
-
-    try:
-        with open(cache_filepath, 'r') as f:
-            lines = f.readlines()
-
-        # Ensure the cache file has the expected number of lines
-        if len(lines) < 10:
-            print(f"Error: {cache_filepath} is missing required configuration data.")
-            return
-
-        # Strip newline characters from each line
-        # The INI file path is on the 4th line (index 3)
-        ini_path = lines[3].strip()
-
-        if not os.path.exists(ini_path):
-            print(f"Error: INI file not found at {ini_path}")
-            return
-
-        # Create the configuration object and read the existing INI file
-        config = configparser.ConfigParser()
-        config.read(ini_path)
-
-        # Ensure the 'Display' section exists
-        if not config.has_section('Display'):
-            config.add_section('Display')
-
-        # Update the specific values in the 'Display' section
-        config.set('Display', 'iSize H', lines[4].strip())
-        config.set('Display', 'iSize W', lines[5].strip())
-        config.set('Display', 'iLocation X', lines[6].strip())
-        config.set('Display', 'iLocation Y', lines[7].strip())
-        config.set('Display', 'bFull Screen', lines[8].strip())
-        config.set('Display', 'bBorderless', lines[9].strip())
-
-        # Write the updated configuration back to the INI file
-        with open(ini_path, 'w') as configfile:
-            config.write(configfile)
-        print(f"Settings in [Display] section of {ini_path} have been updated from {cache_filepath}")
-
-    except FileNotFoundError:
-        print(f"Error: {cache_filepath} not found.")
-    except Exception as e:
-        print(f"An unexpected error occurred: {e}")
-
-def cleanup():
-    """Cleans up resources on application exit."""
-    reset_ini()
-    terminate_bot_process()
-    stop_global_f5_listener()
-
-# --- Main Execution ---
 if __name__ == "__main__":
-    # Required for multiprocessing on Windows when freezing app (e.g. PyInstaller)
-    multiprocessing.freeze_support() 
-    
-    # Note: On macOS, you may need to grant 'Input Monitoring' permission
-    # to your terminal or Python executable in System Settings > Privacy & Security
-    # for the global F5 hotkey to work.
-    # On some Linux distributions (especially with Wayland), global hotkeys
-    # might also have restrictions or require specific setup.
-
+    multiprocessing.freeze_support()
     root = tk.Tk()
-    root_tk_instance = root # Initialize global reference
     setup_login_window(root)
+    root.protocol("WM_DELETE_WINDOW", on_app_closing)
     root.mainloop()
-
-    # Ensure listener is stopped if mainloop somehow exits without on_app_closing
-    # (e.g., if root.quit() was called elsewhere, though current code uses destroy)
     cleanup()
