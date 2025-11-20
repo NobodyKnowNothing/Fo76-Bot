@@ -623,8 +623,8 @@ def findevent():
         for attempt in range(max_join_attempts):
             icons_list = find_icon_positions(icon_path) + find_icon_positions('icons/mutieevent.png') + find_icon_positions('icons/lowresicon1.png')
             if not icons_list:
+                inputs.press("TAB", 0.1)
                 logger.info("Event icon not found on map.")
-                closemap()
                 return False
 
             numofevents = len(icons_list)
@@ -633,8 +633,6 @@ def findevent():
             
             
             pyautogui.moveTo(target_icon_pos[0], target_icon_pos[1], 0.4)
-            click(target_icon_pos[0], target_icon_pos[1])
-            time.sleep(0.3)
             click(target_icon_pos[0], target_icon_pos[1])
             time.sleep(0.3)
 
@@ -647,7 +645,6 @@ def findevent():
             if find_icon_positions(overweight_icon):
                 logger.warning("Player overweight, cannot fast travel to event. Shutting down.")
                 okcheck()
-                closemap()
                 leave()
                 exit(1)
 
@@ -663,12 +660,10 @@ def findevent():
             time.sleep(0.1)
             openmap()
         
-        closemap()
         return False
 
     except Exception as e:
         logger.exception("Error during findevent:")
-        closemap()
         return False
 
 def okcheck():
@@ -1201,9 +1196,9 @@ def decisionTree():
             return True"""
             
         if generalNavCount > 0: inputs.press("tab", 0.1)
-        logger.info("Player still in event or stuck in pre-main menu.")
         if eventCount > 0: time.sleep(10)
         else: time.sleep(2)
+        logger.info("Player still in event or stuck in pre-main menu.")
         return True
     
     
@@ -1219,10 +1214,12 @@ def decisionTree():
                 return True
             return False
         case [False, False, False, False, False, False, True]: # Loaded in
-            # If Not In Event
+            """# If Not In Event
             if eventCount == 0:
                 openmap()
-                if not findevent(): return leave() # Returns true/false
+                if not findevent(): 
+                    return leave() # Returns true/false
+            """
             # if In Event
             return True
         

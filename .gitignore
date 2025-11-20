@@ -33,3 +33,4 @@ OperaGXSetup.exe
 src/ui1.py
 cache.txt
 cache.txt
+/src/__pycache__

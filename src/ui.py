@@ -686,8 +686,16 @@ def setup_main_app_window(root_window):
             terminate_bot_process()
 
         # Update cache 
-        curr_token, _, _, _, _, _, _, _ = get_cached_data()
-        save_cached_data(curr_token, fp1, fp2, fp3, ini_settings, fp1_sec, use_sec, fp3_sec)
+        curr_token, _, _, _, cached_ini, _, _, _ = get_cached_data()
+        
+        settings_to_save = ini_settings
+        # If the new settings are 1280x800, and we have valid cached settings, preserve the cached settings
+        if ini_settings.get('width') == 1280 and ini_settings.get('height') == 800:
+            # Check if cached_ini has valid data (it's a list of strings: [height, width, ...])
+            if cached_ini and len(cached_ini) >= 2 and cached_ini[0] and cached_ini[1]:
+                 settings_to_save = cached_ini
+
+        save_cached_data(curr_token, fp1, fp2, fp3, settings_to_save, fp1_sec, use_sec, fp3_sec)
 
         try:
             # Pass the selected game path as fp1 (the game executable)
