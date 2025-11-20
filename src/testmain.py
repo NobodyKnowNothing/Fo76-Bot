@@ -313,7 +313,7 @@ def mposcheck():  # Testing
 def close_exe():
     killed_by_psutil = False
     for proc in psutil.process_iter(['pid', 'name']):
-        if proc.info['name'] in ["Fallout76.exe", "Project76_GamePass.exe"]:
+        if proc.info['name'] in ["Fallout76.exe", "Project76.exe", "Project76_GamePass.exe"]:
             try:
                 proc.kill()
                 killed_by_psutil = True
@@ -354,13 +354,12 @@ def open_exe():
         logger.info("Fallout76.exe started. Attempting to switch to window.")
         switch_tries = 0
         while switch_tries < 10:
-            if switch_to_application("Fallout76", open_if_not_found=False) or switch_to_application("Project76_GamePass", open_if_not_found=False):
+            if switch_to_application(open_if_not_found=False):
                 success = True
                 break
             logger.warning(f"Failed to switch window, attempt {switch_tries + 1}. Retrying in 5s.")
             time.sleep(5)
             switch_tries += 1
-        
         if not success:
             logger.error("Failed to switch to Fallout76 window after multiple tries.")
 
@@ -372,12 +371,14 @@ def open_exe():
         success = False
     return success
 
-def switch_to_application(window_title, open_if_not_found=True):
-    hwnd = win32gui.FindWindow(None, window_title)
+def switch_to_application(open_if_not_found=True):
+    hwnd = win32gui.FindWindow(None, 'Fallout76')
     if hwnd == 0:
-        logger.warning(f"Window '{window_title}' not found.")
-        if open_if_not_found: time.sleep(5)
-        return open_exe() if open_if_not_found else False
+        hwnd = win32gui.FindWindow(None, 'Project76')
+        if hwnd == 0:
+            logger.warning(f"Window of Fallout76 not found.")
+            if open_if_not_found: time.sleep(5)
+            return open_exe() if open_if_not_found else False
 
     max_attempts = 3
     for attempt in range(max_attempts):
@@ -389,30 +390,30 @@ def switch_to_application(window_title, open_if_not_found=True):
             win32gui.SetForegroundWindow(hwnd)
             time.sleep(0.1) 
             if win32gui.GetForegroundWindow() == hwnd:
-                logger.info(f"Successfully switched to '{window_title}'.")
+                logger.info(f"Successfully switched to Fallout 76.")
                 return True
             else:
                 if attempt < max_attempts - 1:
-                    logger.warning(f"SetForegroundWindow for '{window_title}' did not result in foreground. Attempt {attempt + 1}/{max_attempts}. Retrying...")
+                    logger.warning(f"SetForegroundWindow for Fallout 76 did not result in foreground. Attempt {attempt + 1}/{max_attempts}. Retrying...")
                     time.sleep(1)
                 else:
                      current_fg_window_hwnd = win32gui.GetForegroundWindow()
                      current_fg_window_title = win32gui.GetWindowText(current_fg_window_hwnd) if current_fg_window_hwnd else "None"
-                     logger.error(f"Failed to bring '{window_title}' to foreground. Current foreground: '{current_fg_window_title}'")
+                     logger.error(f"Failed to bring Fallout 76 to foreground. Current foreground: '{current_fg_window_title}'")
 
 
         except Exception as e:
-            logger.error(f"Unexpected error on attempt {attempt + 1} for '{window_title}': {e}")
+            logger.error(f"Unexpected error on attempt {attempt + 1} for Fallout 76: {e}")
             return False 
             
-    logger.error(f"Could not set window '{window_title}' to foreground after {max_attempts} attempts.")
+    logger.error(f"Could not set window Fallout 76 to foreground after {max_attempts} attempts.")
     return False
 
 
 def fo76running():
     for process in psutil.process_iter(['pid', 'name']):
         try:
-            if process.info['name'] in ["Fallout76.exe", "Project76_GamePass.exe"]:
+            if process.info['name'] in ["Fallout76.exe", "Project76.exe", "Project76_GamePass.exe"]:
                 return True
         except (psutil.NoSuchProcess, psutil.AccessDenied, psutil.ZombieProcess):
             pass
@@ -481,7 +482,7 @@ def closemap():
     dailyops = 'icons/tester.png'
 
     scorepos_list = find_icon_positions(scoreicon)
-    opspos_list = find_icon_positions(dailyops)
+    opspos_list = find_icon_positions(dailyops) + find_icon_positions('icons/tester1.png') + find_icon_positions('icons/tester2.png')
 
     if scorepos_list and opspos_list:
         logger.info("Map identified as open, attempting to close.")
@@ -491,7 +492,7 @@ def closemap():
             time.sleep(2)
             
             current_scorepos_list = find_icon_positions(scoreicon)
-            current_opspos_list = find_icon_positions(dailyops)
+            current_opspos_list = find_icon_positions(dailyops) + find_icon_positions('icons/tester1.png')
             
             if not (current_scorepos_list and current_opspos_list):
                 logger.info("Map closed successfully.")
@@ -514,8 +515,7 @@ def closemap():
         return True
 
 def premainmenu():
-    switch_to_application("Fallout76")
-    switch_to_application("Project76_GamePass")
+    switch_to_application()
     
     if ismainmenu():
         logger.info("Already at main menu, skipping pre-main menu steps.")
@@ -555,7 +555,8 @@ def openmap():
     okcheck()
     for fail_attempt in range(max_failcount):
         scorepos_list = find_icon_positions(scoreicon)
-        opspos_list = find_icon_positions(dailyops)
+        opspos_list = find_icon_positions('icons/tester.png') + find_icon_positions('icons/tester1.png') + find_icon_positions('icons/tester2.png')
+
 
         if scorepos_list and opspos_list:
             logger.info("Map already open.")
@@ -566,7 +567,7 @@ def openmap():
         time.sleep(3)
 
         scorepos_list_after_press = find_icon_positions(scoreicon)
-        opspos_list_after_press = find_icon_positions(dailyops)
+        opspos_list_after_press = find_icon_positions(dailyops) + find_icon_positions('icons/tester1.png') + find_icon_positions('icons/tester2.png')
 
         if scorepos_list_after_press and opspos_list_after_press:
             logger.info("Map opened successfully.")
@@ -597,13 +598,30 @@ def findevent():
     global numofevents
     icon_path = 'icons/lowresicon.png'
     overweight_icon = "icons/overweight.png"
+    dailyops = 'icons/tester.png'
     if not openmap():
         logger.warning("Could not open map to find event.")
         return False
     try:
+        target_icon_list = find_icon_positions(dailyops) + find_icon_positions('icons/tester1.png') + find_icon_positions('icons/tester2.png')
+        target_icon_pos = target_icon_list[0]
+        logger.info("Clicking on daily ops to reveal events.")
+        pyautogui.moveTo(target_icon_pos[0], target_icon_pos[1], 0.4)
+        for attempt in range(3):
+            try:
+                click(target_icon_pos[0], target_icon_pos[1])
+                time.sleep(1)
+                target_icon_list = find_icon_positions(dailyops) + find_icon_positions('icons/tester1.png') + find_icon_positions('icons/tester2.png')
+                target_icon_pos = target_icon_list[0]
+            except IndexError:
+                logger.info("No daily ops icon found. Assuming click failed and cursor blocking icon.")
+                time.sleep(1)
+                continue
+            break
+        
         max_join_attempts = 3
         for attempt in range(max_join_attempts):
-            icons_list = find_icon_positions(icon_path) + find_icon_positions('icons/mutieevent.png')
+            icons_list = find_icon_positions(icon_path) + find_icon_positions('icons/mutieevent.png') + find_icon_positions('icons/lowresicon1.png')
             if not icons_list:
                 logger.info("Event icon not found on map.")
                 closemap()
@@ -627,7 +645,10 @@ def findevent():
 
 
             if find_icon_positions(overweight_icon):
-                logger.warning("Player overweight, cannot fast travel to event.")
+                logger.warning("Player overweight, cannot fast travel to event. Shutting down.")
+                okcheck()
+                closemap()
+                leave()
                 exit(1)
 
             if not find_icon_positions('icons/scoreicon.png'):
@@ -638,7 +659,7 @@ def findevent():
                 logger.info(f"Re-attempmting to join event (attempt {attempt + 2}).")
             else:
                 logger.warning("Failed to confirm event join after multiple attempts (icon still present).")
-                return False
+                return True # True because the next decisionTree scan will handle it
             time.sleep(0.1)
             openmap()
         
@@ -798,7 +819,7 @@ def checkevent(badeventcheck=False):
             max_map_checks = 4
             event_found_on_map = False
             for _ in range(max_map_checks):
-                current_icons = find_icon_positions(icon_path)
+                current_icons = find_icon_positions(icon_path) + find_icon_positions('icons/mutieevent.png') + find_icon_positions('icons/lowresicon1.png')
                 if current_icons:
                     if len(current_icons) < numofevents:
                         logger.info("Fewer event icons than before. Trying to re-target/join a new one.")
@@ -828,7 +849,8 @@ def checkevent(badeventcheck=False):
     
     _score_list = find_icon_positions(scoreicon)
     if _score_list:
-        if not find_icon_positions('icons/tester.png'):
+        dailyopslist = find_icon_positions('icons/tester.png') + find_icon_positions('icons/tester1.png') + find_icon_positions('icons/tester2.png')
+        if not dailyopslist:
             logger.info("UI Check: Score icon present, dailyops not. Player might be dead.")
             dead()
             return False 
@@ -889,7 +911,7 @@ def mapclick(x, y):
 
 
 def pipboyeventcheck():
-    switch_to_application("Fallout76") or switch_to_application("Project76_GamePass")
+    switch_to_application()
     datatab_icon = "icons/datatab.png"
     eventtab_icon = "icons/eventtab.png"
     scoreicon = "icons/scoreicon.png"
@@ -951,7 +973,7 @@ def pipboyeventcheck():
 def dead():
     logger.info("Player is dead or needs respawn. Searching for respawn location on map.")
     
-
+    inputs.press("space", 0.05)
     x, y = 640, 400 
     mult = 1
     stage = 1
@@ -1010,7 +1032,7 @@ def dead():
 
 def perkselect():
     logger.info("Executing perkselect function (currently minimal).")
-    switch_to_application("Fallout76") or switch_to_application("Project76_GamePass")
+    switch_to_application("Fallout76") or switch_to_application("Project76")
     time.sleep(0.3)
     inputs.press("tab", 0.1)
     time.sleep(0.3)
@@ -1042,17 +1064,17 @@ def noevent():
     return
 
 def decisionTree():
-    if not (switch_to_application("Fallout76") or switch_to_application("Project76_GamePass")):
+    if not (switch_to_application()):
         return False
     
     # Scans for images
     # 0: Menu, 1: Map Event, 2: Ok, 3: Overweight, 4: Score, 5: Daily Ops, 6: Watericon
     iconList =  [find_icon_positions("icons/menuicon.png") + find_icon_positions("icons/fo1menuicon.png"), # Menu icon
-    find_icon_positions("icons/mutieevent.png") + find_icon_positions("icons/lowresicon.png"), # Event map icon
+    find_icon_positions("icons/mutieevent.png") + find_icon_positions("icons/lowresicon.png") + find_icon_positions("icons/lowresicon1.png"), # Event map icon
     find_icon_positions("icons/ok.png"),
     find_icon_positions("icons/overweight.png"),
     find_icon_positions("icons/scoreicon.png"), 
-    find_icon_positions("icons/tester.png"), # Daily ops map icon
+    find_icon_positions("icons/tester.png") + find_icon_positions('icons/tester2.png') + find_icon_positions('icons/tester1.png'), # Daily ops map icon
     find_icon_positions("icons/watericon.png")]
     iconBoolList = [] # 0: Menu, 1: Map Event, 2: Ok, 3: Overweight, 4: Score, 5: Daily Ops, 6: Watericon
     
@@ -1079,7 +1101,7 @@ def decisionTree():
     generalNavDict = {"tab)" : 0, "t)" : 1, "enter)" : 2, "respawn" : 3, "back": 4}
     eventDict = {"event" : 0, "event:" : 1}
     loadingDict = {"loading" : 4, "by...": 5, "loading." : 7, "loading.." : 8, "loading..." : 9}
-    badeventDict = {"free" : 0, "range" : 1}#, "load" : 2, "baring" : 3}# "moonshine" : 4, "jamboree" : 5} # "feed" : 0, "the" : 1, "people" : 2, "beasts" : 3, "of" : 4, "burden" : 5, "distinguished" : 6, "guests" : 7, "jail" : 8, "break" : 9, }
+    badeventDict = {"free" : 0, "range" : 1, "distinguished" : 2, "guests": 3} #, "load" : 2, "baring" : 3}# "moonshine" : 4, "jamboree" : 5} # "feed" : 0, "the" : 1, "people" : 2, "beasts" : 3, "of" : 4, "burden" : 5, "distinguished" : 6, "guests" : 7, "jail" : 8, "break" : 9, }
     
     # Read ui results formatting/init
     resultTable = [[],[],[],[],[]] # 0: Premain results, 1: General Nav results, 2: Event results, 3: Loading results
@@ -1205,10 +1227,9 @@ def decisionTree():
             return True
         
     # Failure to decide
-    if len(resultTable[1]) >= 1: inputs.press("tab", 0.1)
-    else:
-        logger.error(f"Decision Tree Failure. Could not recognise anything.") 
-        return False
+    if generalNavCount > 0: inputs.press("tab", 0.1)
+    logger.info("Decision tree could not determine state, waiting briefly.")
+    time.sleep(5)
 
 """ef main1(tesseract_path=r'C:\Program Files\Tesseract-OCR\tesseract.exe', fallout_path=r'F:\SteamLibrary\steamapps\common\Fallout76\Fallout76.exe'):
     global falloutpath, leavefail, lastss, numofevents
@@ -1232,7 +1253,7 @@ def decisionTree():
                 logger.info("Game launched successfully.")
                 time.sleep(10) 
         
-        if not switch_to_application("Fallout76") or switch_to_application("Project76_GamePass"):
+        if not switch_to_application():
             logger.warning("Could not switch to Fallout76 window. Restarting game process.")
             send_email("[Fo76 Bot] Issue: Cannot switch to game window", "Attempting to close and restart game.")
             close_exe()
@@ -1374,11 +1395,24 @@ def decisionTree():
 
         logger.info("Bot cycle completed. Going back to start.")"""
 
-def main(tesseract_path=r'C:\Program Files\Tesseract-OCR\tesseract.exe', fallout_path=r'F:\SteamLibrary\steamapps\common\Fallout76\Fallout76.exe'):
+def main(tesseract_path, fallout_path, ini_path, height, width, loc_x, loc_y, fullscreen, borderless):
     global falloutpath, leavefail, lastss, numofevents
     falloutpath = fallout_path
     tesseract_path_init(tesseract_path)
-    
+    if [height, width, loc_x, loc_y, fullscreen, borderless] != [800,1280,0,0,0,1]:
+        close_exe()
+        import configparser
+        # Create a ConfigParser object
+        config = configparser.ConfigParser()
+        config.read(ini_path)
+        config.set('Display', 'iSize H', '800')
+        config.set('Display', 'iSize W', '1280')
+        config.set('Display', 'iLocation X', '0')
+        config.set('Display', 'iLocation Y', '0')
+        config.set('Display', 'bFull Screen', '0')
+        config.set('Display', 'bBorderless', '1')
+        with open(ini_path, 'w') as configfile:
+            config.write(configfile)
     setup_logger() # Initialize the logger
     while True:
         if decisionTree() == False:

@@ -6,6 +6,8 @@ import requests
 import json # For handling potential JSONDecodeError explicitly
 # import threading # No longer needed
 from pynput import keyboard as pynput_keyboard # For global hotkey
+import os
+import configparser
 
 # --- Global variables for process management and UI elements ---
 bot_process = None
@@ -14,6 +16,84 @@ root_tk_instance = None # To store the root Tk instance for closing and bindings
 keyboard_listener = None # For the global pynput keyboard listener
 
 # --- Functions ---
+
+def parse_ini_file(ini_path):
+    """
+    Parses the Fallout76Prefs.ini file to extract specific display settings.
+    
+    Args:
+        ini_path (str): The full path to the Fallout76Prefs.ini file.
+
+    Returns:
+        dict: A dictionary containing the settings, or None if an error occurs.
+    """
+    config = configparser.ConfigParser()
+    # Read the INI file. If the file doesn't exist, it will return an empty list.
+    if not os.path.exists(ini_path):
+        print(f"Error: INI file not found at '{ini_path}'")
+        messagebox.showerror("INI File Error", f"The specified INI file could not be found:\n{ini_path}")
+        return None
+        
+    config.read(ini_path)
+
+    try:
+        settings = {
+            'height': config.getint('Display', 'iSize H'),
+            'width': config.getint('Display', 'iSize W'),
+            'loc_x': config.getint('Display', 'iLocation X'),
+            'loc_y': config.getint('Display', 'iLocation Y'),
+            'fullscreen': config.getint('Display', 'bFull Screen'),
+            'borderless': config.getint('Display', 'bBorderless')
+        }
+        return settings
+    except (configparser.NoSectionError, configparser.NoOptionError) as e:
+        print(f"Error parsing INI file: {e}")
+        messagebox.showerror("INI Parse Error", 
+                             f"Could not find a required setting in '{ini_path}'.\n\n"
+                             f"Please ensure the [Display] section and all required keys exist.\n\n"
+                             f"Details: {e}")
+        return None
+    except ValueError as e:
+        print(f"Error converting INI value: {e}")
+        messagebox.showerror("INI Value Error",
+                             f"A setting in '{ini_path}' has an invalid value (e.g., not a number).\n\n"
+                             f"Details: {e}")
+        return None
+
+def check_bot_status():
+    """
+    Periodically checks if the bot process is alive and updates the status label.
+    This ensures the UI reflects the bot's state even if it stops unexpectedly.
+    """
+    global bot_process, status_label_main, root_tk_instance
+
+    # Stop checking if the main window has been destroyed
+    if not root_tk_instance or not root_tk_instance.winfo_exists():
+        return
+
+    # Check if the status label itself still exists
+    if not status_label_main or not status_label_main.winfo_exists():
+        root_tk_instance.after(2000, check_bot_status) # Keep trying in case it's redrawn
+        return
+
+    is_running = bot_process and bot_process.is_alive()
+    current_status_text = status_label_main.cget("text")
+
+    if is_running:
+        # Bot is running, ensure the label reflects this.
+        pid = bot_process.pid
+        running_message = f"Status: Bot is running (PID: {pid})"
+        if current_status_text != running_message:
+            status_label_main.config(text=running_message)
+    else:
+        # Bot is not running. If the label incorrectly says it is, update it.
+        # This allows specific messages like "Terminated by F5" to persist,
+        # but corrects the status if the bot crashes while the label showed "running".
+        if "running" in current_status_text.lower():
+            status_label_main.config(text="Status: Bot is not running.")
+
+    # Schedule this function to run again after 2 seconds
+    root_tk_instance.after(2000, check_bot_status)
 
 class CreateToolTip(object):
     """
@@ -334,7 +414,7 @@ def setup_login_window(window):
             patron_id = cache[0].strip() if cache[0] else None
 
         if patron_id:
-            url = f"http://127.0.0.1:8080/check_patron/{patron_id}"
+            url = f"https://rust-bot-auth-744976866854.us-central1.run.app/check_patron/{patron_id}"
             result = call_url(url, method="GET")
             if result['success'] and result['data'] and result['data'].get('is_patron'):
                 clear_window()
@@ -395,6 +475,8 @@ def setup_main_app_window(root_window):
 
     default_fp1 = "C:\\Program Files\\Fallout76\\Fallout76.exe"
     default_fp2 = "C:\\Program Files\\Tesseract-OCR\\tesseract.exe"
+    user_docs = os.path.expanduser("~\\Documents") # Finds user's Documents folder
+    default_fp3 = os.path.join(user_docs, "My Games", "Fallout 76", "Fallout76Prefs.ini")
 
     fp1_value = default_fp1
     if cache and len(cache) > 1 and cache[1] and cache[1].strip() != "None":
@@ -404,8 +486,19 @@ def setup_main_app_window(root_window):
     if cache and len(cache) > 2 and cache[2] and cache[2].strip() != "None":
         fp2_value = cache[2].strip()
 
+    fp3_value = default_fp3
+    if cache and len(cache) > 3 and cache[3] and cache[3].strip() != "None":
+        fp3_value = cache[3].strip()
+    
+    cache_ini_vals = []
+    for i in range(4, 9):
+        if cache and len(cache) > i and cache[i] and cache[i].strip() != "None":
+            cache_ini_vals.append(cache[i].strip())
+    
     filepath1_var = tk.StringVar(value=fp1_value)
     filepath2_var = tk.StringVar(value=fp2_value)
+    filepath3_var = tk.StringVar(value=fp3_value)
+    cache_ini_vals_var = tk.StringVar(value=", ".join(cache_ini_vals))
 
 
     # --- Action Functions ---
@@ -413,24 +506,47 @@ def setup_main_app_window(root_window):
         global bot_process
         fp1 = filepath1_var.get()
         fp2 = filepath2_var.get()
-
-        if not fp1 or not fp2 or fp1 == "None" or fp2 == "None":
-            messagebox.showwarning("Input Missing", "Please provide both filepaths.")
+        fp3 = filepath3_var.get()
+        cache_ini_vals = cache_ini_vals_var.get().split(", ")
+        
+        
+        if not all([fp1, fp2, fp3]) or "None" in [fp1, fp2, fp3]:
+            messagebox.showwarning("Input Missing", "Please provide all three filepaths.")
             if status_label_main: status_label_main.config(text="Status: Error - Missing filepaths")
             return
 
-        if status_label_main: status_label_main.config(text=f"Status: Starting with {fp1}, {fp2}")
+        ini_settings = parse_ini_file(fp3)
+        if ini_settings is None:
+            # The parse_ini_file function already showed an error message.
+            if status_label_main: status_label_main.config(text="Status: Error - Failed to read INI file.")
+            return # Stop execution if parsing failed
+        
+        if status_label_main: status_label_main.config(text=f"Status: Starting bot...")
         print(f"Starting bot with Filepath 1: {fp1}")
         print(f"Starting bot with Filepath 2: {fp2}")
+        print(f"Starting bot with INI Filepath: {fp3}")
             
         if bot_process and bot_process.is_alive():
             print("Terminating existing bot process before starting a new one...")
             terminate_bot_process()
             if status_label_main: status_label_main.config(text="Status: Terminated old bot, starting new.")
-
-        write_file("cache.txt", f"{patron_id_from_cache}\n{fp1}\n{fp2}", mode='w')
+        if ini_settings['height'] != str(800) and ini_settings['width'] != str(1280) and ini_settings['loc_x'] != str(0) and ini_settings['loc_y'] != str(0) and ini_settings['fullscreen'] != "0" and ini_settings['borderless'] != "1":
+            write_file("cache.txt", f"{patron_id_from_cache}\n{fp1}\n{fp2}\n{fp3}\n{ini_settings['height']}\n{ini_settings['width']}\n{ini_settings['loc_x']}\n{ini_settings['loc_y']}\n{ini_settings['fullscreen']}\n{ini_settings['borderless']}\n", mode='w')
         try:
-            bot_process = multiprocessing.Process(target=main, args=(fp2, fp1))
+            bot_process = multiprocessing.Process(
+                target=main, 
+                args=(
+                    fp2, 
+                    fp1,
+                    fp3, 
+                    ini_settings['height'],
+                    ini_settings['width'],
+                    ini_settings['loc_x'],
+                    ini_settings['loc_y'],
+                    ini_settings['fullscreen'],
+                    ini_settings['borderless']
+                )
+            )
             bot_process.start()
             print(f"Bot process started with PID: {bot_process.pid}.")
             if status_label_main: status_label_main.config(text=f"Status: Bot process initiated (PID: {bot_process.pid})")
@@ -439,10 +555,12 @@ def setup_main_app_window(root_window):
             if status_label_main: status_label_main.config(text=f"Status: Error starting process - {e}")
             bot_process = None
 
-    def browse_file_action(entry_var, title="Select File"):
+    def browse_file_action(entry_var, title="Select File", executable_only=True):
+        if executable_only: filetypes=(("Executable files", "*.exe"), ("All files", "*.*"), ("Text files", "*.txt"))
+        else: filetypes=(("All files", "*.*"), ("Text files", "*.txt"))
         filename = filedialog.askopenfilename(
             title=title,
-            filetypes=(("Executable files", "*.exe"),("All files", "*.*"), ("Text files", "*.txt"))
+            filetypes=filetypes
         )
         if filename:
             entry_var.set(filename)
@@ -488,9 +606,77 @@ def setup_main_app_window(root_window):
     browse2_button = tk.Button(fp2_frame, text="Browse...", command=lambda: browse_file_action(filepath2_var, "Select Filepath To tesseract.exe"))
     browse2_button.pack(side=tk.LEFT)
     
+    # Filepath 3
+    fp3_frame = tk.Frame(filepaths_group)
+    fp3_frame.pack(fill=tk.X, pady=5)
+    tk.Label(fp3_frame, text="Fallout76Prefs.ini:", width=12, anchor='w').pack(side=tk.LEFT, padx=(0,5))
+    entry2 = tk.Entry(fp3_frame, textvariable=filepath3_var)
+    entry2.pack(side=tk.LEFT, expand=True, fill=tk.X, padx=(0, 5))
+    CreateToolTip(entry2, "Enter the path for Fallout76Prefs.ini file.")
+    browse2_button = tk.Button(fp3_frame, text="Browse...", command=lambda: browse_file_action(filepath3_var, "Select Filepath To Fallout76Prefs.ini", executable_only=False))
+    browse2_button.pack(side=tk.LEFT)
+    
     start_global_f5_listener()
     
     root_window.protocol("WM_DELETE_WINDOW", on_app_closing)
+    
+    root_window.after(2000, check_bot_status)
+
+def reset_ini():
+    """
+    Reads display settings from cache.txt and writes them back to the INI file,
+    preserving other settings.
+    """
+    cache_filepath = "cache.txt"
+
+    try:
+        with open(cache_filepath, 'r') as f:
+            lines = f.readlines()
+
+        # Ensure the cache file has the expected number of lines
+        if len(lines) < 10:
+            print(f"Error: {cache_filepath} is missing required configuration data.")
+            return
+
+        # Strip newline characters from each line
+        # The INI file path is on the 4th line (index 3)
+        ini_path = lines[3].strip()
+
+        if not os.path.exists(ini_path):
+            print(f"Error: INI file not found at {ini_path}")
+            return
+
+        # Create the configuration object and read the existing INI file
+        config = configparser.ConfigParser()
+        config.read(ini_path)
+
+        # Ensure the 'Display' section exists
+        if not config.has_section('Display'):
+            config.add_section('Display')
+
+        # Update the specific values in the 'Display' section
+        config.set('Display', 'iSize H', lines[4].strip())
+        config.set('Display', 'iSize W', lines[5].strip())
+        config.set('Display', 'iLocation X', lines[6].strip())
+        config.set('Display', 'iLocation Y', lines[7].strip())
+        config.set('Display', 'bFull Screen', lines[8].strip())
+        config.set('Display', 'bBorderless', lines[9].strip())
+
+        # Write the updated configuration back to the INI file
+        with open(ini_path, 'w') as configfile:
+            config.write(configfile)
+        print(f"Settings in [Display] section of {ini_path} have been updated from {cache_filepath}")
+
+    except FileNotFoundError:
+        print(f"Error: {cache_filepath} not found.")
+    except Exception as e:
+        print(f"An unexpected error occurred: {e}")
+
+def cleanup():
+    """Cleans up resources on application exit."""
+    reset_ini()
+    terminate_bot_process()
+    stop_global_f5_listener()
 
 # --- Main Execution ---
 if __name__ == "__main__":
@@ -510,4 +696,4 @@ if __name__ == "__main__":
 
     # Ensure listener is stopped if mainloop somehow exits without on_app_closing
     # (e.g., if root.quit() was called elsewhere, though current code uses destroy)
-    stop_global_f5_listener()
+    cleanup()

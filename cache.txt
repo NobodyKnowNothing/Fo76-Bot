@@ -1,3 +1,10 @@
 108692085
 E:/SteamLibrary/steamapps/common/Fallout76/Fallout76.exe
 C:/Program Files/Tesseract-OCR/tesseract.exe
+F:/Documents/My Games/Fallout 76/Fallout76Prefs.ini
+800
+1280
+0
+0
+0
+1
