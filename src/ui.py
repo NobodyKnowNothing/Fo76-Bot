@@ -653,6 +653,14 @@ def setup_main_app_window(root_window):
         if not game_path_to_use or not fp2 or not fp3:
             messagebox.showwarning("Missing Info", "Please provide all required filepaths.")
             return
+
+        if not os.path.exists(game_path_to_use):
+            messagebox.showerror("File Not Found", f"Game executable not found:\n{game_path_to_use}")
+            return
+            
+        if not os.path.exists(fp2):
+            messagebox.showerror("File Not Found", f"Tesseract executable not found:\n{fp2}")
+            return
             
         ini_settings = parse_ini_file(fp3)
         if ini_settings is None:
