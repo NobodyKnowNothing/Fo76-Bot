@@ -146,7 +146,7 @@ def parse_ini_file(ini_path):
 def get_cached_data():
     """Reads cache.txt and returns (refresh_token, fp1, fp2, fp3, ini_settings_list, fp1_secondary, use_secondary)."""
     if not os.path.exists(CACHE_FILE):
-        return None, "", "", "", [], "", False
+        return None, "", "", "", [], "", False, ""
     
     try:
         with open(CACHE_FILE, 'r', encoding='utf-8') as f:

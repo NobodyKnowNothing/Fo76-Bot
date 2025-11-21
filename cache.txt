@@ -1,13 +1,12 @@
-DsXSDCVPhda-sNqEjnY5bM9Y9If0LEED_m2zdXA-VOU
-E:/SteamLibrary/steamapps/common/Fallout76/Fallout76.exe
-C:/Program Files/Tesseract-OCR/tesseract.exe
-F:/Documents/My Games/Fallout 76/Fallout76Prefs.ini
-1080
-1920
-0
-0
-0
-1
-E:/SteamLibrary/steamapps/common/Fallout76/Fallout76.exe
-true
-F:/Documents/My Games/Fallout 76/Fallout76Prefs.ini
+n54O-e83XBka_1ap76kfQCBlEn7EfL6IT6YV6cUYE2M
+
+
+
+
+
+
+
+
+
+
+false

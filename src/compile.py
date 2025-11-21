@@ -163,7 +163,7 @@ def run_pyinstaller(pyinstaller_path):
 
     # Add data files (e.g., icons folder)
     for src_name, dest_name_in_bundle in DATA_TO_BUNDLE:
-        src_path_on_disk = os.path.join(SCRIPT_DIR, src_name)
+        src_path_on_disk = os.path.join(os.path.dirname(SCRIPT_DIR), src_name)
         if not os.path.exists(src_path_on_disk):
             print(f"ERROR: Data item '{src_name}' not found at '{src_path_on_disk}'.")
             sys.exit(1)

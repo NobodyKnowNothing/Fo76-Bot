@@ -20,6 +20,8 @@ def resource_path(relative_path):
     except Exception:
         base_path = os.path.abspath(".")
 
+    # Normalize path separators for the current OS
+    relative_path = relative_path.replace('/', os.sep).replace('\\\\', os.sep)
     return os.path.join(base_path, relative_path)
 
 # --- Logger Setup ---
@@ -1197,7 +1199,6 @@ def decisionTree():
             
         if generalNavCount > 0: inputs.press("tab", 0.1)
         if eventCount > 0: time.sleep(10)
-        else: time.sleep(2)
         logger.info("Player still in event or stuck in pre-main menu.")
         return True
     
