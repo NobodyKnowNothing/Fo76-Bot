@@ -1159,7 +1159,7 @@ def decisionTree():
         # Loading
         if loadingCount > 0:
             logger.info("Loading...")
-            time.sleep(5)
+            time.sleep(10)
             return True
         
         # Premain menu
@@ -1211,7 +1211,7 @@ def decisionTree():
             return leave() # Returns true/false
         case [False, True, False, False, True, True, False]: # Map open, is event
             if findevent():
-                time.sleep(5)
+                time.sleep(1)
                 return True
             return False
         case [False, False, False, False, False, False, True]: # Loaded in
