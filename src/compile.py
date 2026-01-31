@@ -24,8 +24,9 @@ DATA_TO_BUNDLE = [
 
 # --- Paths ---
 SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
-BUILD_DIR = os.path.join("D:\\", "Fo76Bot_Build", "build_temp") # Use D: drive for temp build
-DIST_DIR = os.path.join("D:\\", "Fo76Bot_Build", "dist\\Fo76-Event-Bot")    # Use D: drive for output
+PROJECT_ROOT = os.path.dirname(SCRIPT_DIR) # Assumes src/compile.py
+BUILD_DIR = os.path.join(PROJECT_ROOT, "build_temp") 
+DIST_DIR = os.path.join(PROJECT_ROOT, "dist")
 PYINSTALLER_WORK_DIR = os.path.join(BUILD_DIR, "pyinstaller_work")
 PYINSTALLER_SPEC_DIR = BUILD_DIR
 
@@ -33,48 +34,19 @@ PYINSTALLER_SPEC_DIR = BUILD_DIR
 
 def check_pyinstaller():
     """Checks if PyInstaller is available."""
-    pyinstaller_exe_name = "pyinstaller.exe"
-    pyinstaller_path = None
-
-    # 1. Try shutil.which directly with .exe
-    pyinstaller_path = shutil.which(pyinstaller_exe_name)
-
-    # 2. If not found or it's a directory, try to find it relative to Python's Scripts directory
-    if not pyinstaller_path or os.path.isdir(pyinstaller_path):
-        python_exe_path = sys.executable
-        python_dir = os.path.dirname(python_exe_path)
-        
-        # Common locations for Scripts directory relative to python.exe
-        # For standard installs: <python_dir>\Scripts\pyinstaller.exe
-        # For venvs: <python_dir>\pyinstaller.exe (if Scripts is the venv's bin)
-        # or <venv_dir>\Scripts\pyinstaller.exe
-        
-        potential_paths = [
-            os.path.join(python_dir, "Scripts", pyinstaller_exe_name), # Standard install
-            os.path.join(python_dir, pyinstaller_exe_name),            # Some venv structures
-            os.path.join(os.path.dirname(python_dir), "Scripts", pyinstaller_exe_name) # Venv (..\Scripts)
-        ]
-        
-        for P_path in potential_paths:
-            if os.path.isfile(P_path):
-                pyinstaller_path = P_path
-                break
-        else: # If loop completes without break
-            # If still not found, and shutil.which gave a directory, check inside that
-            if pyinstaller_path and os.path.isdir(pyinstaller_path): # pyinstaller_path here is from initial shutil.which
-                check_in_dir = os.path.join(pyinstaller_path, pyinstaller_exe_name)
-                if os.path.isfile(check_in_dir):
-                    pyinstaller_path = check_in_dir
-
-
-    if not pyinstaller_path or not os.path.isfile(pyinstaller_path):
-        print(f"ERROR: PyInstaller executable ('{pyinstaller_exe_name}') not found.")
-        print("Please ensure PyInstaller is installed ('pip install pyinstaller') and your Python environment is correctly configured.")
-        print(f"Python executable being used: {sys.executable}")
-        sys.exit(1)
-            
-    print(f"PyInstaller found at: {pyinstaller_path}")
-    return pyinstaller_path
+    # Simple check using shutil.which is standard best practice
+    path = shutil.which("pyinstaller")
+    if not path:
+        # Fallback: check if we can run it via python -m PyInstaller
+        try:
+            subprocess.run([sys.executable, "-m", "PyInstaller", "--version"], capture_output=True, check=True)
+            return [sys.executable, "-m", "PyInstaller"] # Return list for subprocess
+        except subprocess.CalledProcessError:
+            print("ERROR: PyInstaller not found. Please install it: pip install pyinstaller")
+            sys.exit(1)
+    
+    print(f"PyInstaller found: {path}")
+    return path
 
 def prepare_build_directory():
     """Creates or cleans the build directory."""
@@ -84,7 +56,7 @@ def prepare_build_directory():
         try:
             shutil.rmtree(BUILD_DIR)
         except PermissionError:
-            print(f"ERROR: Permission denied to remove {BUILD_DIR}. Please close any programs using it and try again.")
+            print(f"ERROR: Permission denied to remove {BUILD_DIR}. Ensure no files are open.")
             sys.exit(1)
     os.makedirs(BUILD_DIR, exist_ok=True)
     os.makedirs(PYINSTALLER_WORK_DIR, exist_ok=True)
@@ -148,8 +120,13 @@ def run_pyinstaller(pyinstaller_path):
     # PyInstaller command arguments
     # Using --onedir for better compatibility with data files and multiprocessing
     # Use --windowed to prevent console from showing for the GUI app
-    cmd = [
-        pyinstaller_path,
+    # Handle if pyinstaller_path is a list (python -m PyInstaller) or string (exe path)
+    if isinstance(pyinstaller_path, list):
+        base_cmd = pyinstaller_path
+    else:
+        base_cmd = [pyinstaller_path]
+
+    cmd = base_cmd + [
         "--noconfirm",      # Overwrite output directory without asking
         "--onedir",         # Create a directory bundle (recommended)
         # "--onefile",      # Alternative: create a single executable file

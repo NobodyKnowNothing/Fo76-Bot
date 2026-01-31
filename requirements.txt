@@ -1,0 +1,9 @@
+requests
+pynput
+pyautogui
+# pywin32 is often installed as pywin32, but import is win32gui/win32con
+pywin32
+psutil
+pillow
+pytesseract
+opencv-python

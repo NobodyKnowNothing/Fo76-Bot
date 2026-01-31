@@ -28,270 +28,44 @@ def resource_path(relative_path):
 import logging
 import logging.handlers
 import os
-from cryptography.hazmat.primitives import hashes, serialization
-from cryptography.hazmat.primitives.asymmetric import padding as rsa_padding
-from cryptography.hazmat.primitives.ciphers import Cipher, algorithms, modes
-from cryptography.hazmat.backends import default_backend
-import base64
-import sys # For sys.stderr
 
 # --- Constants ---
 LOG_FILENAME = 'fo76bot.log'
-HARDCODED_PUBLIC_KEY_PEM = """-----BEGIN PUBLIC KEY-----
-MIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8AMIIBCgKCAQEAvgxSvDJ2gON+2rxpyCK1
-4y9xDiFYXoLNxJqcs1W4ogxBBdFlwndAq13phId+HCPTZPUHsyFx1ofpfPw3KPku
-KZU140VbJG5xri54UUNo7pO4EQKjtfFN4iFCiLWiG81P83I52+cpqGOJ1SznCM8g
-quhhPG5IiOn3vhIA85XadLZyMo928diTo12AmjRzDLTYsVvAS/F8b8GTaBim18v4
-idHz33Qav4IgzxyS5T5DTmC6zoRRgwXzZru+YV0dqOZ9en2KJIeJmpeJt2k/EhDP
-xmIkENWSbJAcefRskS2CrZzwv301m9eaJKIT11S5fKK+WdL5t04wyNky2XwHnfAB
-XQIDAQAB
------END PUBLIC KEY-----"""
-# Example of a placeholder key for testing the check in setup_logger
-# HARDCODED_PUBLIC_KEY_PEM = """-----BEGIN PUBLIC KEY-----
-# MIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8AMIIBCgKCAQEAyReplaceWithYourKey...
-# -----END PUBLIC KEY-----"""
 
 
-# --- Internal Logger for Logging System Diagnostics ---
-_LOGGING_MODULE_NAME = __name__
-# Use a very distinct name for this logger to avoid any conflicts
-_INTERNAL_DEBUG_LOGGER_NAME = f"{_LOGGING_MODULE_NAME}.ENCRYPTION_DEBUG"
-_internal_logger = logging.getLogger(_INTERNAL_DEBUG_LOGGER_NAME)
-_internal_logger.handlers.clear() # Ensure no old handlers
-_internal_logger.setLevel(logging.DEBUG) # Crucial: set logger level
 
-_console_handler_internal = logging.StreamHandler(sys.stderr) # Explicitly use stderr
-_console_handler_internal.setLevel(logging.DEBUG) # Crucial: set handler level
-_console_handler_internal.setFormatter(
-    logging.Formatter(f"INTERNAL-ENCRYPTION-DEBUG [%(levelname)s] %(name)s -> %(funcName)s:%(lineno)d: %(message)s")
-)
-_internal_logger.addHandler(_console_handler_internal)
-_internal_logger.propagate = False # Do not pass to root
-_internal_logger.disabled = True # Ensure it's not disabled
 
-_internal_logger.info(f"Internal debug logger '{_INTERNAL_DEBUG_LOGGER_NAME}' configured and active.")
-
-# --- Encryption Helper Functions ---
-def load_public_key_from_string(pem_string):
-    _internal_logger.debug("Attempting to load public key from PEM string.")
-    try:
-        public_key = serialization.load_pem_public_key(
-            pem_string.encode('utf-8'),
-            backend=default_backend()
-        )
-        _internal_logger.debug("Public key loaded successfully from PEM string.")
-        return public_key
-    except Exception as e:
-        # This error is critical because if the key is provided but invalid, encryption is expected but will fail.
-        _internal_logger.critical(f"CRITICAL ERROR loading public key from string: {e}. Encryption WILL FAIL if this key was intended for use.", exc_info=True)
-        raise ValueError(f"Invalid public key PEM string: {e}")
-
-def encrypt_message_hybrid(message_bytes, public_key):
-    _internal_logger.debug("encrypt_message_hybrid called.")
-    aes_key = os.urandom(32)
-    iv = os.urandom(12) # GCM standard IV size is 12 bytes (96 bits)
-    cipher = Cipher(algorithms.AES(aes_key), modes.GCM(iv), backend=default_backend())
-    encryptor = cipher.encryptor()
-    ciphertext = encryptor.update(message_bytes) + encryptor.finalize()
-    tag = encryptor.tag # GCM tag, typically 16 bytes
-    
-    encrypted_aes_key = public_key.encrypt(
-        aes_key,
-        rsa_padding.OAEP(
-            mgf=rsa_padding.MGF1(algorithm=hashes.SHA256()),
-            algorithm=hashes.SHA256(),
-            label=None
-        )
-    )
-    # Concatenate: Encrypted AES Key + IV + GCM Tag + Ciphertext
-    result_bytes = encrypted_aes_key + iv + tag + ciphertext
-    result_b64 = base64.b64encode(result_bytes)
-    _internal_logger.debug(f"encrypt_message_hybrid completed. Output base64 length: {len(result_b64)}")
-    return result_b64
-
-# --- Custom Formatter ---
-class EncryptedFormatter(logging.Formatter):
-    def __init__(self, fmt=None, datefmt=None, style='%', public_key_pem_string=None, file_handler_level=logging.INFO):
-        super().__init__(fmt, datefmt, style)
-        self.formatter_id = id(self) # For tracking instance
-        _internal_logger.info(f"EncryptedFormatter instance {self.formatter_id} __init__ starting.")
-        self.public_key = None
-        self._file_handler_level = file_handler_level # Used for conditional internal logging
-
-        if public_key_pem_string:
-            try:
-                # Responsibility for checking if public_key_pem_string *is* a placeholder
-                # (and thus shouldn't be used) primarily lies with the calling code (e.g., setup_logger).
-                # Here, we attempt to load whatever string is given.
-                # load_public_key_from_string will raise ValueError if it's not a valid PEM.
-                self.public_key = load_public_key_from_string(public_key_pem_string)
-                _internal_logger.info(f"EncryptedFormatter {self.formatter_id}: Successfully initialized public key.")
-            except ValueError as e: # Raised by load_public_key_from_string for invalid PEM
-                _internal_logger.error(f"EncryptedFormatter {self.formatter_id}: Failed to initialize public key (Invalid PEM string provided): {e}. Encryption will be skipped.")
-            except Exception as e: # Other unexpected errors during key loading
-                _internal_logger.error(f"EncryptedFormatter {self.formatter_id}: Unexpected error initializing public key: {e}. Encryption will be skipped.", exc_info=True)
-        else:
-            _internal_logger.warning(f"EncryptedFormatter {self.formatter_id}: No public key PEM string provided. Encryption will be skipped.")
-        
-        _internal_logger.info(f"EncryptedFormatter instance {self.formatter_id} __init__ finished. Public key is {'SET' if self.public_key else 'NOT SET'}.")
-
-    def format(self, record):
-        _internal_logger.debug(f"--- EncryptedFormatter {self.formatter_id} format() CALLED for record: {record.name} - {record.levelname} - '{str(record.msg)[:50]}...' ---")
-        _internal_logger.debug(f"  Formatter {self.formatter_id}: Current self.public_key is {'SET' if self.public_key else 'NOT SET'}.")
-
-        # Store original state that defines getMessage() behavior and cached formatted exception text
-        original_msg = record.msg
-        original_args = record.args
-        # getattr is used because record.exc_text might not be set yet by any formatter.
-        original_exc_text = getattr(record, 'exc_text', None) 
-
-        # Get the fully substituted message. This call itself does not alter 'record.message'.
-        # It uses the current record.msg and record.args.
-        log_message_to_process = record.getMessage()
-        _internal_logger.debug(f"  Formatter {self.formatter_id}: log_message_to_process = '{log_message_to_process[:100]}...'")
-
-        # These will be temporarily set on the record for super().format()
-        # Default to original values, meaning no encryption or modification initially.
-        msg_for_formatting = original_msg
-        args_for_formatting = original_args
-
-        if self.public_key and log_message_to_process: # Ensure there's content to encrypt
-            _internal_logger.debug(f"  Formatter {self.formatter_id}: Public key IS SET. Attempting encryption for: '{log_message_to_process[:50]}...'")
-            try:
-                message_to_encrypt_bytes = log_message_to_process.encode('utf-8')
-                encrypted_msg_b64 = encrypt_message_hybrid(
-                    message_to_encrypt_bytes,
-                    self.public_key
-                )
-                msg_for_formatting = f"[ENCRYPTED]{encrypted_msg_b64.decode('utf-8')}"
-                args_for_formatting = () # The message is now fully formed, no args needed for formatting
-                _internal_logger.debug(f"  Formatter {self.formatter_id}: Encryption SUCCEEDED. msg_for_formatting is now: '{msg_for_formatting[:60]}...'")
-            except Exception as e:
-                _internal_logger.error(
-                    f"  Formatter {self.formatter_id}: Encryption FAILED for record [{record.name}/{record.levelname}]. Error: {e}. Original msg: {log_message_to_process[:100]}...",
-                    exc_info=True # Log this specific exception to the internal logger
-                )
-                # Fallback: format the original message with a prefix indicating failure
-                msg_for_formatting = f"[ENCRYPTION_FAILED] {log_message_to_process}"
-                args_for_formatting = ()
-                _internal_logger.debug(f"  Formatter {self.formatter_id}: msg_for_formatting after encryption failure: '{msg_for_formatting[:60]}...'")
-        
-        elif not self.public_key:
-            _internal_logger.warning(f"  Formatter {self.formatter_id}: Public key IS NOT SET. Skipping encryption for '{log_message_to_process[:50]}...'.")
-            # This internal warning is for diagnostics; the actual log record will be formatted plainly.
-            if record.levelno >= self._file_handler_level: 
-                 _internal_logger.warning(
-                    f"  Formatter {self.formatter_id}: Public key not available for record [{record.name}/{record.levelname}]. "
-                    f"Logging plain to file: '{log_message_to_process[:100]}...'"
-                )
-            # msg_for_formatting and args_for_formatting correctly remain as original_msg, original_args
-        
-        else: # log_message_to_process is empty (e.g. logger.info(""))
-            _internal_logger.debug(f"  Formatter {self.formatter_id}: log_message_to_process is empty. Skipping encryption.")
-            # msg_for_formatting and args_for_formatting correctly remain as original_msg, original_args
-
-        # Temporarily modify record.msg and record.args for the call to super().format()
-        record.msg = msg_for_formatting
-        record.args = args_for_formatting
-        
-        _internal_logger.debug(f"  Formatter {self.formatter_id}: Before super().format(), record.msg is: '{str(record.msg)[:100]}...' (args {'present and non-empty' if record.args else 'cleared or empty'})")
-        
-        # Let the base Formatter do its job.
-        # super().format(record) will:
-        # 1. Call record.getMessage() using the (potentially modified) record.msg and record.args.
-        # 2. Store the result in record.message.
-        # 3. Format the entire log string using its format string (_fmt) and record.__dict__ (which includes the new record.message).
-        # 4. If record.exc_info is present, it will format it and store it in record.exc_text (if not already there or if self.usesExceptionText() is true).
-        formatted_log_string = super().format(record)
-        _internal_logger.debug(f"  Formatter {self.formatter_id}: After super().format(), formatted_log_string is: '{formatted_log_string[:100]}...'")
-        
-        # --- CRITICAL: Restore record state for other handlers ---
-        # This ensures that other handlers processing the same LogRecord instance
-        # will use the original message and arguments.
-        record.msg = original_msg
-        record.args = original_args
-        
-        # Restore exc_text to its state before this formatter ran.
-        # If super().format() populated it, and original_exc_text was None,
-        # this sets it back to None. Subsequent formatters will recompute if needed.
-        # If original_exc_text was already populated (e.g., by a prior custom formatter), this restores it.
-        record.exc_text = original_exc_text
-        
-        # record.message is left as whatever super().format() set it to.
-        # The next handler's formatter will call record.getMessage() again (using the now-restored msg/args),
-        # and will overwrite record.message with its own formatted version. This is standard and expected.
-        
-        _internal_logger.debug(f"  Formatter {self.formatter_id}: record.msg, record.args, record.exc_text RESTORED to their original states for subsequent handlers.")
-        _internal_logger.debug(f"--- EncryptedFormatter {self.formatter_id} format() COMPLETED for record: {record.name} - {record.levelname} ---")
-        
-        return formatted_log_string
 
 # --- Application Logger (Fo76Bot) ---
 logger = logging.getLogger('Fo76Bot')
 
 def setup_logger():
-    _internal_logger.info(f"--- Running setup_logger() for '{logger.name}' ---")
-    
     if logger.hasHandlers():
-        _internal_logger.debug(f"Clearing existing handlers for '{logger.name}' logger.")
         logger.handlers.clear()
 
-    logger.setLevel(logging.DEBUG) # Set level on the logger itself
+    logger.setLevel(logging.DEBUG)
     log_format_str = '%(asctime)s - %(name)s - %(levelname)s - %(module)s.%(funcName)s:%(lineno)d - %(message)s'
 
-    active_public_key_pem = None
-    # Check for a generic placeholder string within the hardcoded key
-    if "yReplaceWithYourKey" in HARDCODED_PUBLIC_KEY_PEM: # A common pattern for placeholders
-        _internal_logger.critical(
-            "FATAL: Placeholder public key detected in HARDCODED_PUBLIC_KEY_PEM based on 'yReplaceWithYourKey' string. File logging will NOT be encrypted."
-        )
-    else:
-        active_public_key_pem = HARDCODED_PUBLIC_KEY_PEM
-        _internal_logger.info("Actual public key PEM will be used for EncryptedFormatter.")
-
-    # File Handler - Encrypted
-    file_handler_level = logging.INFO
-    fh = logging.handlers.RotatingFileHandler(
-        LOG_FILENAME, maxBytes=5*1024*1024, backupCount=3, mode='a', encoding='utf-8'
-    )
-    fh.setLevel(file_handler_level) # Handler level
-    encrypted_formatter = EncryptedFormatter(log_format_str, public_key_pem_string=active_public_key_pem, file_handler_level=file_handler_level)
-    fh.setFormatter(encrypted_formatter)
+    # File Handler
+    fh = logging.handlers.RotatingFileHandler(LOG_FILENAME, maxBytes=5*1024*1024, backupCount=3, mode='a', encoding='utf-8')
+    fh.setLevel(logging.INFO)
+    formatter = logging.Formatter(log_format_str)
+    fh.setFormatter(formatter)
     logger.addHandler(fh)
-    _internal_logger.info(f"Added RotatingFileHandler to '{logger.name}' with EncryptedFormatter (ID: {id(encrypted_formatter)}, Level: {logging.getLevelName(file_handler_level)}).")
 
-    # Console Handler - Plain Text
-    console_handler_level = logging.DEBUG
-    ch = logging.StreamHandler(sys.stdout) # Explicitly use stdout for application logs
-    ch.setLevel(console_handler_level) # Handler level
-    plain_formatter = logging.Formatter(log_format_str)
-    ch.setFormatter(plain_formatter)
+    # Console Handler
+    ch = logging.StreamHandler(sys.stdout)
+    ch.setLevel(logging.DEBUG)
+    ch.setFormatter(formatter)
     logger.addHandler(ch)
-    _internal_logger.info(f"Added StreamHandler to '{logger.name}' with plain_formatter (Level: {logging.getLevelName(console_handler_level)}).")
 
-    logger.propagate = False # Prevent passing to root logger
-    _internal_logger.info(f"Set '{logger.name}.propagate = False'.")
-
-    _internal_logger.info(f"--- setup_logger() for '{logger.name}' COMPLETED ---")
+    logger.propagate = False
     
-    # Test log messages immediately after setup
-    # These will be processed by both handlers if their levels permit.
-    logger.info("Fo76Bot logger setup complete. File logs (INFO+) should be encrypted. Console logs (DEBUG+) plain.")
-    logger.debug("This is a Fo76Bot DEBUG message (Console only, plain).") # Below INFO, so only console
-    try:
-        1 / 0
-    except ZeroDivisionError:
-        # exc_info=True will cause exception info to be added to the LogRecord
-        logger.error("Fo76Bot ERROR with exception (File encrypted, Console plain).", exc_info=True)
+    logger.info("Fo76Bot logger setup complete.")
 
 # Example of how to run (if this were the main script)
 if __name__ == '__main__':
-    _internal_logger.info(f"Running example usage from __main__ in {_LOGGING_MODULE_NAME}")
-    setup_logger()
-    logger.warning("This is a test WARNING message after setup.")
-    logger.info("Another INFO message for testing: User %s logged in.", "test_user")
-    logger.info("") # Test with empty message
-    _internal_logger.info("Example usage finished.")
+    pass
 
 
 falloutpath = None

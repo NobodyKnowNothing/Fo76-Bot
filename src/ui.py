@@ -4,8 +4,6 @@ import multiprocessing
 import requests
 import json
 import webbrowser
-import http.server
-import socketserver
 import threading
 import urllib.parse
 import os
@@ -29,90 +27,16 @@ except ImportError:
         while True:
             time.sleep(1)
 
-# --- PATREON CONFIGURATION ---
-PATREON_CLIENT_ID = "4ll9uHw4PikXcPodKO7RbEUtu3D3s4JDgwPKGdwYnh8dM8EB51Ynsg1YHja_goc8"
-PATREON_CLIENT_SECRET = "MT2kVn_mCbhHw8pDZo_-MyqUPVbWyZ8dG_dFzGilC-JkcLHFhOPooMjmF8nO4Wcd"
-PATREON_CAMPAIGN_ID = "2272743"
-REDIRECT_URI = "http://localhost:5000/callback"
-PORT = 5000
-CACHE_FILE = "cache.txt"
+CACHE_FILE = "config.json"
 
 # --- Global variables ---
 bot_process = None
 status_label_main = None 
-status_label_login = None
 root_tk_instance = None 
 keyboard_listener = None 
-auth_server = None 
-auth_code = None 
 
 # --- Helper Functions ---
 
-def call_url(
-    url: str,
-    method: str = "GET",
-    params: dict = None,
-    data: dict = None,
-    json_payload: dict = None,
-    headers: dict = None,
-    timeout: int = 15,
-    allow_redirects: bool = True
-    ) -> dict:
-    result = {
-        "success": False,
-        "status_code": None,
-        "content_type": None,
-        "data": None,
-        "headers": None,
-        "error_message": None,
-        "raw_response": None,
-    }
-    try:
-        request_headers = headers if headers else {}
-        if json_payload and 'Content-Type' not in request_headers:
-            request_headers['Content-Type'] = 'application/json'
-        response = requests.request(
-            method=method.upper(),
-            url=url,
-            params=params,
-            data=data if not json_payload else None,
-            json=json_payload,
-            headers=request_headers,
-            timeout=timeout,
-            allow_redirects=allow_redirects
-        )
-        result["raw_response"] = response
-        result["status_code"] = response.status_code
-        result["headers"] = dict(response.headers)
-        result["content_type"] = response.headers.get("Content-Type", "").lower()
-        
-        try:
-            response.raise_for_status()
-        except requests.exceptions.HTTPError:
-             result["error_message"] = f"HTTP {response.status_code}: {response.text}"
-        
-        # Try to parse JSON regardless of content type if it looks like it might be JSON, 
-        # or if the content type suggests it.
-        # Patreon returns application/vnd.api+json which failed the previous strict check.
-        json_parsed = False
-        try:
-            result["data"] = response.json()
-            json_parsed = True
-            if not result["error_message"]: result["success"] = True
-        except json.JSONDecodeError:
-            pass
-            
-        if not json_parsed:
-            if "text/" in result["content_type"]:
-                result["data"] = response.text
-                if not result["error_message"]: result["success"] = True
-            else:
-                result["data"] = response.content
-                if not result["error_message"]: result["success"] = True
-            
-    except Exception as e:
-        result["error_message"] = f"An unexpected error occurred: {e}"
-    return result
 
 def parse_ini_file(ini_path):
     """Parses the Fallout76Prefs.ini file to extract specific display settings."""
@@ -144,62 +68,42 @@ def parse_ini_file(ini_path):
         return None
 
 def get_cached_data():
-    """Reads cache.txt and returns (refresh_token, fp1, fp2, fp3, ini_settings_list, fp1_secondary, use_secondary)."""
+    """Reads config.json and returns settings."""
+    defaults = ("", "", "", [], "", False, "")
     if not os.path.exists(CACHE_FILE):
-        return None, "", "", "", [], "", False, ""
+        return defaults
     
     try:
         with open(CACHE_FILE, 'r', encoding='utf-8') as f:
-            lines = f.read().splitlines()
+            data = json.load(f)
+            
+        fp1 = data.get("game_path", "")
+        fp2 = data.get("tesseract_path", "")
+        fp3 = data.get("ini_path", "")
+        ini_settings = data.get("ini_settings", [])
+        fp1_sec = data.get("alt_game_path", "")
+        use_sec = data.get("use_alt_config", False)
+        fp3_sec = data.get("alt_ini_path", "")
         
-        # Pad lines if missing
-        while len(lines) < 12:
-            lines.append("")
+        return fp1, fp2, fp3, ini_settings, fp1_sec, use_sec, fp3_sec
+    except Exception as e:
+        print(f"Error reading cache: {e}")
+        return defaults
 
-        r_token = lines[0].strip()
-        fp1 = lines[1].strip()
-        fp2 = lines[2].strip()
-        fp3 = lines[3].strip()
-        ini_settings = lines[4:10] # List of 6 strings
-        fp1_sec = lines[10].strip()
-        use_sec = lines[11].strip().lower() == 'true'
-        
-        # New fields for alternative INI
-        fp3_sec = lines[12].strip() if len(lines) > 12 else ""
-        # use_sec_ini removed, we use use_sec for both
-
-        return r_token, fp1, fp2, fp3, ini_settings, fp1_sec, use_sec, fp3_sec
-    except Exception:
-        return None, "", "", "", [], "", False, ""
-
-def save_cached_data(refresh_token, fp1, fp2, fp3, ini_settings, fp1_sec, use_sec, fp3_sec):
-    """Saves data to cache.txt."""
+def save_cached_data(fp1, fp2, fp3, ini_settings, fp1_sec, use_sec, fp3_sec):
+    """Saves data to config.json."""
+    data = {
+        "game_path": fp1,
+        "tesseract_path": fp2,
+        "ini_path": fp3,
+        "ini_settings": ini_settings,
+        "alt_game_path": fp1_sec,
+        "use_alt_config": use_sec,
+        "alt_ini_path": fp3_sec
+    }
     try:
         with open(CACHE_FILE, 'w', encoding='utf-8') as f:
-            f.write(f"{refresh_token or ''}\n")
-            f.write(f"{fp1 or ''}\n")
-            f.write(f"{fp2 or ''}\n")
-            f.write(f"{fp3 or ''}\n")
-            
-            # ini_settings should be a list of 6 values or a dict
-            if isinstance(ini_settings, dict):
-                f.write(f"{ini_settings.get('height', '')}\n")
-                f.write(f"{ini_settings.get('width', '')}\n")
-                f.write(f"{ini_settings.get('loc_x', '')}\n")
-                f.write(f"{ini_settings.get('loc_y', '')}\n")
-                f.write(f"{ini_settings.get('fullscreen', '')}\n")
-                f.write(f"{ini_settings.get('borderless', '')}\n")
-            elif isinstance(ini_settings, list):
-                for i in range(6):
-                    val = ini_settings[i] if i < len(ini_settings) else ""
-                    f.write(f"{val}\n")
-            else:
-                # Fallback empty
-                for _ in range(6): f.write("\n")
-            
-            f.write(f"{fp1_sec or ''}\n")
-            f.write(f"{'true' if use_sec else 'false'}\n")
-            f.write(f"{fp3_sec or ''}")
+            json.dump(data, f, indent=4)
     except Exception as e:
         print(f"Failed to save cache: {e}")
 
@@ -213,13 +117,14 @@ def reset_ini():
             return
 
         with open(CACHE_FILE, 'r') as f:
-            lines = f.readlines()
-
-        if len(lines) < 10:
+            data = json.load(f)
+            
+        ini_path = data.get("ini_path", "")
+        settings = data.get("ini_settings", [])
+        
+        if not ini_path or not settings or len(settings) < 6:
             print(f"Error: {CACHE_FILE} is missing required configuration data.")
             return
-
-        ini_path = lines[3].strip()
 
         if not os.path.exists(ini_path):
             print(f"Error: INI file not found at {ini_path}")
@@ -231,12 +136,12 @@ def reset_ini():
         if not config.has_section('Display'):
             config.add_section('Display')
 
-        config.set('Display', 'iSize H', lines[4].strip())
-        config.set('Display', 'iSize W', lines[5].strip())
-        config.set('Display', 'iLocation X', lines[6].strip())
-        config.set('Display', 'iLocation Y', lines[7].strip())
-        config.set('Display', 'bFull Screen', lines[8].strip())
-        config.set('Display', 'bBorderless', lines[9].strip())
+        config.set('Display', 'iSize H', str(settings[0]))
+        config.set('Display', 'iSize W', str(settings[1]))
+        config.set('Display', 'iLocation X', str(settings[2]))
+        config.set('Display', 'iLocation Y', str(settings[3]))
+        config.set('Display', 'bFull Screen', str(settings[4]))
+        config.set('Display', 'bBorderless', str(settings[5]))
 
         with open(ini_path, 'w') as configfile:
             config.write(configfile)
@@ -318,9 +223,6 @@ def on_app_closing():
     print("Closing app...")
     stop_global_f5_listener()
     terminate_bot_process()
-    if auth_server:
-        auth_server.shutdown()
-        auth_server.server_close()
     if root_tk_instance:
         root_tk_instance.destroy()
 
@@ -383,201 +285,6 @@ def stop_global_f5_listener():
         keyboard_listener.stop()
         keyboard_listener = None
 
-# --- Patreon Logic ---
-
-class OAuthHandler(http.server.BaseHTTPRequestHandler):
-    def do_GET(self):
-        global auth_code
-        parsed_path = urllib.parse.urlparse(self.path)
-        query = urllib.parse.parse_qs(parsed_path.query)
-        
-        if 'code' in query:
-            auth_code = query['code'][0]
-            self.send_response(200)
-            self.send_header('Content-type', 'text/html')
-            self.end_headers()
-            self.wfile.write(b"<html><body><h1>Login Successful!</h1><script>window.close();</script></body></html>")
-            threading.Thread(target=self.server.shutdown).start()
-        else:
-            self.send_response(400)
-            self.wfile.write(b"Error: No code received.")
-
-def validate_patreon_membership(access_token):
-    """Checks if user is an active patron of the campaign."""
-    url = "https://www.patreon.com/api/oauth2/v2/identity"
-    params = {
-        "include": "memberships.campaign", 
-        "fields[member]": "patron_status,lifetime_support_cents"
-    }
-    headers = {"Authorization": f"Bearer {access_token}"}
-    
-    result = call_url(url, params=params, headers=headers)
-    
-    if not result['success']:
-        return False, f"API Error: {result.get('error_message')}"
-    
-    data = result['data']
-    included = data.get('included', [])
-    
-    for item in included:
-        if item.get('type') == 'member':
-            relationships = item.get('relationships', {})
-            campaign_data = relationships.get('campaign', {}).get('data', {})
-            
-            if campaign_data.get('id') == PATREON_CAMPAIGN_ID:
-                status = item.get('attributes', {}).get('patron_status')
-                if status == 'active_patron':
-                    return True, "Active"
-                else:
-                    return False, f"Status is '{status}'"
-
-    return False, "Not a member of this campaign."
-
-def refresh_patreon_token(old_refresh_token):
-    """Uses the refresh token to get a NEW access token."""
-    token_url = "https://www.patreon.com/api/oauth2/token"
-    payload = {
-        "grant_type": "refresh_token",
-        "refresh_token": old_refresh_token,
-        "client_id": PATREON_CLIENT_ID,
-        "client_secret": PATREON_CLIENT_SECRET
-    }
-    
-    result = call_url(token_url, method="POST", data=payload)
-    
-    if result['success']:
-        new_access = result['data'].get('access_token')
-        new_refresh = result['data'].get('refresh_token')
-        return True, new_access, new_refresh
-    else:
-        return False, None, result.get('error_message')
-
-def start_patreon_login_flow(window):
-    global auth_server, auth_code
-    
-    if status_label_login:
-        status_label_login.config(text="Waiting for browser login...", fg="blue")
-    window.update()
-
-    auth_url = (
-        f"https://www.patreon.com/oauth2/authorize"
-        f"?response_type=code"
-        f"&client_id={PATREON_CLIENT_ID}"
-        f"&redirect_uri={urllib.parse.quote(REDIRECT_URI)}"
-        f"&scope=identity%20identity.memberships"
-    )
-
-    auth_code = None
-    try:
-        auth_server = socketserver.TCPServer(("", PORT), OAuthHandler)
-    except OSError:
-        if status_label_login:
-            status_label_login.config(text=f"Port {PORT} occupied.", fg="red")
-        return
-
-    server_thread = threading.Thread(target=auth_server.serve_forever)
-    server_thread.daemon = True
-    server_thread.start()
-
-    webbrowser.open(auth_url)
-
-    def check_for_code():
-        global auth_code, auth_server
-        if auth_code:
-            auth_server.server_close()
-            auth_server = None
-            if status_label_login:
-                status_label_login.config(text="Verifying token...", fg="orange")
-            exchange_code_for_token(auth_code, window)
-        elif server_thread.is_alive():
-            window.after(1000, check_for_code)
-        else:
-            if status_label_login:
-                status_label_login.config(text="Login timed out.", fg="red")
-            if auth_server: 
-                auth_server.server_close()
-                auth_server = None
-
-    window.after(1000, check_for_code)
-
-def exchange_code_for_token(code, window):
-    token_url = "https://www.patreon.com/api/oauth2/token"
-    payload = {
-        "code": code,
-        "grant_type": "authorization_code",
-        "client_id": PATREON_CLIENT_ID,
-        "client_secret": PATREON_CLIENT_SECRET,
-        "redirect_uri": REDIRECT_URI
-    }
-    
-    result = call_url(token_url, method="POST", data=payload)
-    
-    if not result['success']:
-        if status_label_login:
-            status_label_login.config(text=f"Login Failed: {result.get('error_message')}", fg="red")
-        return
-
-    access_token = result['data'].get('access_token')
-    refresh_token = result['data'].get('refresh_token')
-
-    is_valid, msg = validate_patreon_membership(access_token)
-    
-    if is_valid:
-        # Save credentials - preserve existing paths if possible, but we are in login flow so maybe we just read what we can
-        _, fp1, fp2, fp3, ini_settings, fp1_sec, use_sec, fp3_sec = get_cached_data()
-        save_cached_data(refresh_token, fp1, fp2, fp3, ini_settings, fp1_sec, use_sec, fp3_sec)
-        
-        clear_window()
-        setup_main_app_window(window)
-    else:
-        if status_label_login:
-            status_label_login.config(text=f"Access Denied: {msg}", fg="red")
-
-# --- Auto Login Logic ---
-
-def attempt_auto_login(window):
-    """Runs in a background thread to check cache validity."""
-    cached_refresh, fp1, fp2, fp3, ini_settings, fp1_sec, use_sec, fp3_sec = get_cached_data()
-    
-    if not cached_refresh or len(cached_refresh) < 5:
-        # No valid token, stop here and wait for user input
-        return
-
-    # We have a token, update UI to show we are working
-    def update_ui_checking():
-        if status_label_login:
-            status_label_login.config(text="Verifying saved session...", fg="blue")
-    window.after(0, update_ui_checking)
-
-    # Try to refresh the token
-    success, new_access, new_refresh = refresh_patreon_token(cached_refresh)
-
-    if success:
-        # Token refreshed, now check membership
-        is_member, msg = validate_patreon_membership(new_access)
-        
-        if is_member:
-            # Success! Save new refresh token
-            save_cached_data(new_refresh, fp1, fp2, fp3, ini_settings, fp1_sec, use_sec, fp3_sec)
-            
-            # Switch to main window
-            def switch_to_main():
-                clear_window()
-                setup_main_app_window(window)
-            window.after(0, switch_to_main)
-            return
-        else:
-            # Token valid, but membership expired
-            def show_error():
-                if status_label_login:
-                    status_label_login.config(text=f"Session Expired: {msg}", fg="red")
-            window.after(0, show_error)
-    else:
-        # Refresh failed (token revoked or expired completely)
-        def show_fail():
-            if status_label_login:
-                status_label_login.config(text="Session expired. Please log in again.", fg="orange")
-        window.after(0, show_fail)
 
 # --- UI Setup ---
 
@@ -587,26 +294,6 @@ def clear_window():
         for widget in root_tk_instance.winfo_children():
             widget.destroy()
 
-def setup_login_window(window):
-    global status_label_login, root_tk_instance
-    root_tk_instance = window
-
-    window.title("Fallout Bot Login")
-    window.geometry("350x220")
-
-    tk.Label(window, text="Authentication Required", font=("Arial", 12, "bold")).pack(pady=(20, 10))
-    tk.Label(window, text="You must be an active Patron to use this bot.", font=("Arial", 9)).pack(pady=5)
-
-    login_btn = tk.Button(window, text="Login with Patreon", bg="#f96854", fg="white", 
-                          font=("Arial", 10, "bold"), height=2, width=20,
-                          command=lambda: start_patreon_login_flow(window))
-    login_btn.pack(pady=20)
-
-    status_label_login = tk.Label(window, text="", fg="red", wraplength=300)
-    status_label_login.pack(pady=5)
-    
-    # Trigger auto-login check in background
-    threading.Thread(target=attempt_auto_login, args=(window,), daemon=True).start()
 
 def setup_main_app_window(root_window):
     global status_label_main, bot_process, root_tk_instance
@@ -626,7 +313,7 @@ def setup_main_app_window(root_window):
     status_label_main.pack(side=tk.LEFT, fill=tk.X, expand=True, padx=5)
 
     # --- Load cache for FilePaths ---
-    current_refresh_token, cached_fp1, cached_fp2, cached_fp3, cached_ini, cached_fp1_sec, cached_use_sec, cached_fp3_sec = get_cached_data()
+    cached_fp1, cached_fp2, cached_fp3, cached_ini, cached_fp1_sec, cached_use_sec, cached_fp3_sec = get_cached_data()
     
     # Defaults
     fp1_val = cached_fp1 if cached_fp1 else "C:\\Program Files\\Fallout76\\Fallout76.exe"
@@ -686,7 +373,7 @@ def setup_main_app_window(root_window):
             terminate_bot_process()
 
         # Update cache 
-        curr_token, _, _, _, cached_ini, _, _, _ = get_cached_data()
+        _, _, _, cached_ini, _, _, _ = get_cached_data()
         
         settings_to_save = ini_settings
         # If the new settings are 1280x800, and we have valid cached settings, preserve the cached settings
@@ -695,7 +382,7 @@ def setup_main_app_window(root_window):
             if cached_ini and len(cached_ini) >= 2 and cached_ini[0] and cached_ini[1]:
                  settings_to_save = cached_ini
 
-        save_cached_data(curr_token, fp1, fp2, fp3, settings_to_save, fp1_sec, use_sec, fp3_sec)
+        save_cached_data(fp1, fp2, fp3, settings_to_save, fp1_sec, use_sec, fp3_sec)
 
         try:
             # Pass the selected game path as fp1 (the game executable)
@@ -802,7 +489,7 @@ def setup_main_app_window(root_window):
 if __name__ == "__main__":
     multiprocessing.freeze_support()
     root = tk.Tk()
-    setup_login_window(root)
+    setup_main_app_window(root)
     root.protocol("WM_DELETE_WINDOW", on_app_closing)
     root.mainloop()
     cleanup()
