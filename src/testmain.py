@@ -382,7 +382,7 @@ def switch_to_application(open_if_not_found=True):
             if open_if_not_found: time.sleep(5)
             return open_exe() if open_if_not_found else False
 
-    max_attempts = 3
+    max_attempts = 10
     for attempt in range(max_attempts):
         try:
             if win32gui.IsIconic(hwnd):
@@ -397,7 +397,7 @@ def switch_to_application(open_if_not_found=True):
             else:
                 if attempt < max_attempts - 1:
                     logger.warning(f"SetForegroundWindow for Fallout 76 did not result in foreground. Attempt {attempt + 1}/{max_attempts}. Retrying...")
-                    time.sleep(1)
+                    time.sleep(2)
                 else:
                      current_fg_window_hwnd = win32gui.GetForegroundWindow()
                      current_fg_window_title = win32gui.GetWindowText(current_fg_window_hwnd) if current_fg_window_hwnd else "None"
@@ -412,13 +412,15 @@ def switch_to_application(open_if_not_found=True):
     return False
 
 
-def fo76running():
-    for process in psutil.process_iter(['pid', 'name']):
-        try:
-            if process.info['name'] in ["Fallout76.exe", "Project76.exe", "Project76_GamePass.exe"]:
-                return True
-        except (psutil.NoSuchProcess, psutil.AccessDenied, psutil.ZombieProcess):
-            pass
+def fo76running(retry=False, retrycount=3): # mr google be stealing all the researcher data from there ide and google colab
+    for i in range(retrycount):
+        for process in psutil.process_iter(['pid', 'name']):
+            try:
+                if process.info['name'] in ["Fallout76.exe", "Project76.exe", "Project76_GamePass.exe"]:
+                    return True
+            except (psutil.NoSuchProcess, psutil.AccessDenied, psutil.ZombieProcess):
+                pass
+        if retry: time.sleep(5)
     return False
 
 
@@ -1228,170 +1230,6 @@ def decisionTree():
     if generalNavCount > 0: inputs.press("tab", 0.1)
     logger.info("Decision tree could not determine state, waiting briefly.")
     time.sleep(5)
-
-"""ef main1(tesseract_path=r'C:\Program Files\Tesseract-OCR\tesseract.exe', fallout_path=r'F:\SteamLibrary\steamapps\common\Fallout76\Fallout76.exe'):
-    global falloutpath, leavefail, lastss, numofevents
-    falloutpath = fallout_path
-    tesseract_path_init(tesseract_path)
-
-    send_email("[FO76 Bot] Bot starting sequence...", "Bot is initializing or restarting.")
-    logger.info("Starting bot sequence...")
-
-    while True:
-        current_game_state_problem = None
-
-        if not fo76running():
-            logger.info("Fallout76 not running. Attempting to launch.")
-            if not open_exe():
-                logger.critical("Failed to open Fallout76. Shutting down bot cycle.")
-                send_email("[Fo76 Bot] Critical: Failed to launch game", "Game could not be started. Bot stopping.")
-                debugscreenshot()
-                return 
-            else:
-                logger.info("Game launched successfully.")
-                time.sleep(10) 
-        
-        if not switch_to_application():
-            logger.warning("Could not switch to Fallout76 window. Restarting game process.")
-            send_email("[Fo76 Bot] Issue: Cannot switch to game window", "Attempting to close and restart game.")
-            close_exe()
-            time.sleep(5)
-            continue
-
-        okcheck()
-
-        if not ismainmenu():
-            if premainmenu():
-                logger.info("Successfully navigated pre-main menu screen.")
-            else:
-                if not ismainmenu():
-                    logger.warning("Failed to navigate pre-main menu and not at main menu. Checking if in game.")
-                    if isplayer():
-                        logger.info("Player loaded in, but not at main menu.")
-                        current_game_state_problem = "loaded but not at main menu"
-                    else:
-                        current_game_state_problem = "pre-main menu navigation failure"
-                else:
-                    logger.info("Reached main menu despite premainmenu() returning False.")
-        
-        if not current_game_state_problem and not ismainmenu():
-             logger.error("Still not at main menu after pre-main menu handling. Critical error.")
-             current_game_state_problem = "stuck before main menu"
-
-        if not current_game_state_problem and ismainmenu():
-            logger.info("At main menu. Attempting to join game world.")
-            if join():
-                logger.info("Join sequence initiated. Waiting for player to load.")
-                if not whenplayerload():
-                    logger.error("Player failed to load into the world after join.")
-                    send_email("[Fo76 Bot] Player load failure", "Player did not load into world after timeout.")
-                    debugscreenshot()
-                    current_game_state_problem = "player load failure"
-                else:
-                    logger.info("Player successfully loaded into the world.")
-            else:
-                logger.warning("Failed to initiate join from main menu.")
-                current_game_state_problem = "join game failure"
-        
-        if (not current_game_state_problem or isplayer()) and fo76running() and not ismainmenu():
-            current_game_state_problem = None # Reset if we are in game
-            logger.info("In game. Looking for events.")
-            if findevent():
-                logger.info("Event join attempt made. Verifying load and event status.")
-                if whenplayerload():
-                    time.sleep(1)
-                    max_event_active_checks = 5
-                    event_confirmed_active = False
-                    for _ in range(max_event_active_checks):
-                        if not fo76running(): break
-                        if checkevent():
-                            event_confirmed_active = True
-                            break
-                        logger.info("Event not confirmed active yet. Retrying checkevent/findevent.")
-                        if findevent():
-                            if whenplayerload():
-                                continue 
-                            else:
-                                current_game_state_problem = "load failure after re-finding event"
-                                break 
-                        else:
-                            time.sleep(5)
-                    
-                    if not fo76running(): current_game_state_problem = "game closed during event"
-
-                    if not current_game_state_problem and event_confirmed_active:
-                        logger.info("Event active. Monitoring event completion.")
-                        send_email("[FO76 Bot] Event joined.", "Monitoring event.")
-                        inputs.press("LEFT_CTRL", 0.1)
-                        time.sleep(15)
-
-                        event_duration_checks = 0
-                        max_event_duration_checks = 51 
-                        
-                        while checkevent(False) and event_duration_checks < max_event_duration_checks:
-                            if not fo76running():
-                                current_game_state_problem = "game closed during active event"
-                                break
-                            inputs.press("a", 0.2)
-                            time.sleep(20)
-                            inputs.press("d", 0.2)
-                            event_duration_checks += 1
-                        
-                        if not current_game_state_problem:
-                            if event_duration_checks >= max_event_duration_checks:
-                                logger.warning("Event took longer than expected.")
-                                send_email("[Fo76 Bot] Event duration exceeded limit", "Unexpected behaviour or very long event. Screenshot taken.")
-                                debugscreenshot()
-                            else:
-                                logger.info("Event completed or no longer detected by checkevent.")
-                                send_email("[Fo76 Bot] Event complete", "Event assumed complete.")
-                                debugscreenshot()
-                        
-                        if not current_game_state_problem:
-                            if not leave():
-                                logger.error("Failed to leave to main menu after event.")
-                                current_game_state_problem = "failed to leave after event"
-                            else:
-                                logger.info("Successfully left to main menu after event.")
-
-                    elif not current_game_state_problem:
-                        logger.warning("Could not confirm an active (good) event after multiple attempts.")
-                        send_email("[FO76 Bot] Event confirmation failed", "Could not confirm active event. Screenshot.")
-                        debugscreenshot()
-                        if not leave():
-                             current_game_state_problem = "failed to leave after event confirmation failure"
-                else:
-                    logger.error("Failed to load after initial event join attempt.")
-                    current_game_state_problem = "player load failure post findevent"
-            
-            else:
-                logger.info("No event found or failed to join. Leaving world.")
-                if not leave():
-                    logger.error("Failed to leave to main menu (no event found path).")
-                    current_game_state_problem = "failed to leave (no event)"
-                else:
-                    logger.info("Successfully left to main menu (no event found path).")
-        
-        elif not current_game_state_problem and fo76running() and not ismainmenu() and not isplayer():
-            logger.error("Cannot identify player state correctly (not main menu, but isplayer() is false).")
-            send_email("[FO76 Bot] Player state identification issue", "Could not identify player state. Screenshot.")
-            debugscreenshot()
-            current_game_state_problem = "player state unidentifiable"
-
-        if current_game_state_problem:
-            logger.error(f"Encountered problem: {current_game_state_problem}. Restarting game.")
-            send_email("[FO76 Bot] Restarting game due to issue", f"Problem: {current_game_state_problem}. Restarting Fallout76.")
-            close_exe()
-            time.sleep(15)
-            continue
-
-        if not fo76running():
-            logger.warning("Fallout76 instance not found unexpectedly. Bot will attempt to restart it.")
-            send_email("[FO76 Bot] Game instance lost", "Fallout76 closed unexpectedly. Bot will restart.")
-            debugscreenshot()
-            continue
-
-        logger.info("Bot cycle completed. Going back to start.")"""
 
 def main(tesseract_path, fallout_path, ini_path, height, width, loc_x, loc_y, fullscreen, borderless):
     global falloutpath, leavefail, lastss, numofevents

@@ -1,12 +1,12 @@
-n54O-e83XBka_1ap76kfQCBlEn7EfL6IT6YV6cUYE2M
-
-
-
-
-
-
-
-
-
+sDz3dRe24bUiuLgRtpxHzI1DFFA0tXGghaod8JMzrkc
+E:/SteamLibrary/steamapps/common/Fallout76/Fallout76.exe
+C:\Program Files\Tesseract-OCR\tesseract.exe
+F:/Documents/My Games/Fallout 76/Fallout76Prefs.ini
+800
+1280
+0
+0
+0
+1
 
 false
