@@ -33,9 +33,6 @@ import os
 LOG_FILENAME = 'fo76bot.log'
 
 
-
-
-
 # --- Application Logger (Fo76Bot) ---
 logger = logging.getLogger('Fo76Bot')
 

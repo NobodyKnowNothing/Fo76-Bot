@@ -27,7 +27,8 @@ except ImportError:
         while True:
             time.sleep(1)
 
-CACHE_FILE = "config.json"
+SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
+CACHE_FILE = os.path.join(SCRIPT_DIR, "config.json")
 
 # --- Global variables ---
 bot_process = None
@@ -69,9 +70,13 @@ def parse_ini_file(ini_path):
 
 def get_cached_data():
     """Reads config.json and returns settings."""
-    defaults = ("", "", "", [], "", False, "")
+    # Defaults
+    fp1, fp2, fp3 = "", "", ""
+    ini_settings = [] 
+    fp1_sec, use_sec, fp3_sec = "", False, ""
+
     if not os.path.exists(CACHE_FILE):
-        return defaults
+        return fp1, fp2, fp3, ini_settings, fp1_sec, use_sec, fp3_sec
     
     try:
         with open(CACHE_FILE, 'r', encoding='utf-8') as f:
@@ -80,7 +85,24 @@ def get_cached_data():
         fp1 = data.get("game_path", "")
         fp2 = data.get("tesseract_path", "")
         fp3 = data.get("ini_path", "")
-        ini_settings = data.get("ini_settings", [])
+        
+        raw_settings = data.get("ini_settings")
+        if isinstance(raw_settings, dict):
+            # Convert dict to expected list format if it is a dict
+            # Order matters: height, width, loc_x, loc_y, fullscreen, borderless
+            ini_settings = [
+                raw_settings.get("height", 0),
+                raw_settings.get("width", 0),
+                raw_settings.get("loc_x", 0),
+                raw_settings.get("loc_y", 0),
+                raw_settings.get("fullscreen", 0),
+                raw_settings.get("borderless", 0)
+            ]
+        elif isinstance(raw_settings, list):
+            ini_settings = raw_settings
+        else:
+             ini_settings = []
+
         fp1_sec = data.get("alt_game_path", "")
         use_sec = data.get("use_alt_config", False)
         fp3_sec = data.get("alt_ini_path", "")
@@ -88,7 +110,7 @@ def get_cached_data():
         return fp1, fp2, fp3, ini_settings, fp1_sec, use_sec, fp3_sec
     except Exception as e:
         print(f"Error reading cache: {e}")
-        return defaults
+        return fp1, fp2, fp3, ini_settings, fp1_sec, use_sec, fp3_sec
 
 def save_cached_data(fp1, fp2, fp3, ini_settings, fp1_sec, use_sec, fp3_sec):
     """Saves data to config.json."""
@@ -136,12 +158,23 @@ def reset_ini():
         if not config.has_section('Display'):
             config.add_section('Display')
 
-        config.set('Display', 'iSize H', str(settings[0]))
-        config.set('Display', 'iSize W', str(settings[1]))
-        config.set('Display', 'iLocation X', str(settings[2]))
-        config.set('Display', 'iLocation Y', str(settings[3]))
-        config.set('Display', 'bFull Screen', str(settings[4]))
-        config.set('Display', 'bBorderless', str(settings[5]))
+        if isinstance(settings, dict):
+             config.set('Display', 'iSize H', str(settings.get('height', 0)))
+             config.set('Display', 'iSize W', str(settings.get('width', 0)))
+             config.set('Display', 'iLocation X', str(settings.get('loc_x', 0)))
+             config.set('Display', 'iLocation Y', str(settings.get('loc_y', 0)))
+             config.set('Display', 'bFull Screen', str(settings.get('fullscreen', 0)))
+             config.set('Display', 'bBorderless', str(settings.get('borderless', 0)))
+        elif isinstance(settings, list) and len(settings) >= 6:
+            config.set('Display', 'iSize H', str(settings[0]))
+            config.set('Display', 'iSize W', str(settings[1]))
+            config.set('Display', 'iLocation X', str(settings[2]))
+            config.set('Display', 'iLocation Y', str(settings[3]))
+            config.set('Display', 'bFull Screen', str(settings[4]))
+            config.set('Display', 'bBorderless', str(settings[5]))
+        else:
+             print("Error: Invalid settings format in cache.")
+             return
 
         with open(ini_path, 'w') as configfile:
             config.write(configfile)
@@ -363,9 +396,24 @@ def setup_main_app_window(root_window):
             return
             
         ini_settings = parse_ini_file(ini_path_to_use)
+        
+        # Fallback to cache if INI parsing fails
         if ini_settings is None:
-            if status_label_main: status_label_main.config(text="Status: Error - Failed to read INI file.")
-            return
+            _, _, _, cached_ini, _, _, _ = get_cached_data()
+            if cached_ini and len(cached_ini) >= 6:
+                print("Warning: Failed to parse INI. Using cached settings from config.json.")
+                # cached_ini is a list: [height, width, loc_x, loc_y, fullscreen, borderless]
+                ini_settings = {
+                    'height': cached_ini[0],
+                    'width': cached_ini[1],
+                    'loc_x': cached_ini[2],
+                    'loc_y': cached_ini[3],
+                    'fullscreen': cached_ini[4],
+                    'borderless': cached_ini[5]
+                }
+            else:
+                if status_label_main: status_label_main.config(text="Status: Error - Failed to read INI file and no cache available.")
+                return
 
         if status_label_main: status_label_main.config(text=f"Status: Starting...")
         

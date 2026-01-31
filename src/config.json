@@ -1,0 +1,16 @@
+{
+    "game_path": "E:/SteamLibrary/steamapps/common/Fallout76/Fallout76.exe",
+    "tesseract_path": "C:\\Program Files\\Tesseract-OCR\\tesseract.exe",
+    "ini_path": "F:/Documents/My Games/Fallout 76/Fallout76Prefs.ini",
+    "ini_settings": {
+        "height": 1080,
+        "width": 1920,
+        "loc_x": 0,
+        "loc_y": 0,
+        "fullscreen": 0,
+        "borderless": 1
+    },
+    "alt_game_path": "",
+    "use_alt_config": false,
+    "alt_ini_path": ""
+}
