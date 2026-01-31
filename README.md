@@ -52,6 +52,6 @@ I hate this project now and fuck Bethesda for taking down my patreon and not mak
 
 -   `src/ui.py`: Main entry point and configuration UI. The most readable code because AI wrote most of it.
 -   `src/testmain.py`: Core bot logic, its highly redundant and unoptimized.
--   `src/press.py`, `input.py`: Input simulation helpers that do the same thing lol you fucking refactor it.
+-   `src/press.py`, `input.py`: Input simulation helpers that do the same thing lol you refactor it.
 -   `src/readtext.py`: OCR helpers.
 
