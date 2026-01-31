@@ -15,7 +15,7 @@ This bot interacts with the game client and will violate the terms of service of
 
 The bot is spaghetti code. I am a student, and this was my first large project. I am also a chronic contrarian and hate best practices. 
 
-It does work. If you want new features, fork and make them yourself. I will not be adding new features. 
+It does work. If you want new features, fork and make them yourself, I will merge if I approve. I will not be adding new features. 
 
 I hate this project now and fuck Bethesda for taking down my patreon and not making better games so this project is one giant middle finger to Bethesda.
 
