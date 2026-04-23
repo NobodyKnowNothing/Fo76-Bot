@@ -4,7 +4,7 @@ A Python-based event automation bot for Fallout 76.
 
 ## Features
 
--   **Automated Event Farming**: Detects and joins public events.
+-   **Automated Event Farming**: Detects and joins public events. It serverhops in a loop looking for the public event icon on the map, then fast travels there and waits until the event is over, this provides a modest but decent amount of loot even though you just afked.  
 -   **Game Management**: Can close and relaunch the game on a crash.
 
 ## Disclaimer
@@ -14,7 +14,7 @@ This bot interacts with the game client and will violate the terms of service of
 ## Developer Disclaimer
 
 The bot has badly doced and unmanaged code. It was written as a personal project initially and I dont intend to address the issues.
-
+Is a state machine, effectively just a spaghetti code mealy state machine. When testing and coding it I treated it as if it is stochastic in nature due to how annoying it is to debug edge cases.
 It does work. If you want new features, fork and make them yourself, I will merge if I approve. I will not be adding new features. 
 
 ## Requirements
