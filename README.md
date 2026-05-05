@@ -13,8 +13,8 @@ This bot interacts with the game client and will violate the terms of service of
 
 ## Developer Disclaimer
 
-The bot has badly doced and unmanaged code. It was written as a personal project initially and I dont intend to address the issues.
-Is a state machine, effectively just a spaghetti code mealy state machine. When testing and coding it I treated it as if it is stochastic in nature due to how annoying it is to debug edge cases.
+The bot has badly doc'd and unmanaged code. It was written as a personal project initially and I dont intend to address the issues.
+It's a state machine, effectively just a spaghetti code mealy state machine. When testing and coding it I treated it as if it is stochastic in nature due to how annoying it is to debug its edge cases.
 It does work. If you want new features, fork and make them yourself, I will merge if I approve. I will not be adding new features. 
 
 ## Requirements
@@ -50,6 +50,6 @@ It does work. If you want new features, fork and make them yourself, I will merg
 
 -   `src/ui.py`: Main entry point and configuration UI. The most readable code because AI wrote most of it.
 -   `src/testmain.py`: Core bot logic, its highly redundant and unoptimized.
--   `src/press.py`, `input.py`: Input simulation helpers that do the same thing lol you refactor it.
+-   `src/press.py`, `stc/input.py`: Input simulation helpers that do the same thing lol you refactor it.
 -   `src/readtext.py`: OCR helpers.
 
